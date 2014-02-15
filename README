@@ -1,0 +1,47 @@
+
+E M U L I K A
+=============
+
+Emulika is another emulator for the Sega Master System console.
+
+Emulika does not aim to be different from others emulators, it was written just for fun and also probably with a little of nostalgia.
+
+Emulika is written in C and uses the SDL2 library for rendering.
+
+Emulika running on Linux (little endian), Raspberry Pi and Windows (MinGW32/Cygwin).
+
+Emulika supports the following features :
+	- zipped ROM
+	- windowed mode / fullscreen
+	- keyboard / joysticks
+	- screenshots
+	- snapshots
+	- and ... 100% command line :)
+
+./emulika --help for more options.
+
+The source is released under the GPLv3 license.
+
+
+Key bindings
+------------
+
+Player 1 : 
+	Left, Top, Right, Down
+	Button 1 : Z (or W)
+	Button 2 : X
+
+Player 2 :
+	4, 8, 6, 5
+	Button 1 : 0
+	Button 2 : .
+	
+Key P	: Pause
+Key R	: Software reset
+Key S	: Snapshot
+Key H	: Screenshot
+Key F2	: Decrease window size
+Key F3	: Increase window size
+Key F4	: Toggle windowed mode / fullscreen
+Key ESC	: Quit
+

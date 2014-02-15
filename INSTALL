@@ -1,0 +1,23 @@
+
+To build and install Emulika:
+
+	$ ./configure
+	$ make
+	$ sudo make install
+
+
+=> Raspberry Pi
+	Build SDL2 without the X11 support or execute it in a non X11 environment.
+		$ ./configure --disable-video-x11
+
+=> Windows (MinGW32)
+	Try to build SDL2 with full DirectX support -> http://www.libsdl.org/extras/win32/mingw32/README.txt
+	And build your own version of libxml2 library because the included version with MinGW32 crashes.
+
+
+Libraries
+---------
+http://www.libsdl.org/
+http://www.xmlsoft.org/
+http://www.nih.at/libzip/
+
