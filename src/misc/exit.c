@@ -74,7 +74,7 @@ void popexit()
     callback_and_free(el);
 }
 
-void pushvobject(void *object, void (*callback)(void*))
+void _pushobject(void *object, void (*callback)(void*))
 {
     assert(_exitlist!=NULL);
     assert(object!=NULL);

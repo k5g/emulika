@@ -99,7 +99,8 @@ am__v_AR_1 =
 libmisc_a_AR = $(AR) $(ARFLAGS)
 libmisc_a_LIBADD =
 am_libmisc_a_OBJECTS = exit.$(OBJEXT) list.$(OBJEXT) log4me.$(OBJEXT) \
-	string.$(OBJEXT) xml.$(OBJEXT)
+	sha1.$(OBJEXT) sha1sum.$(OBJEXT) string.$(OBJEXT) \
+	xml.$(OBJEXT)
 libmisc_a_OBJECTS = $(am_libmisc_a_OBJECTS)
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
@@ -259,6 +260,8 @@ libmisc_a_SOURCES = types.h \
 		exit.c exit.h \
 		list.c list.h \
 		log4me.c log4me.h \
+		sha1.c sha1.h \
+		sha1sum.c sha1sum.h \
 		string.c string.h \
 		xml.c xml.h
 
@@ -314,6 +317,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/exit.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/list.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log4me.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sha1.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sha1sum.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/string.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/xml.Po@am__quote@
 

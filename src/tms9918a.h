@@ -54,15 +54,20 @@ typedef struct _tms9918a {
     int frame;
     int scanline;
     int slcounter;
+    int screenheight;
 
     int r0_vert_scroll_inhibit;
     int r0_do_not_display_leftmost_col;
     int r0_hsync_int;
     int r0_top2rows_no_hscroll;
+    int r0_mode2;
+    int r0_mode4;
 
     int r1_display;
     int r1_vsync_int;
     int r1_8x16sprite;
+    int r1_mode3;
+    int r1_mode1;
 
     int r2_bgbaseaddr;
 
@@ -78,7 +83,8 @@ typedef struct _tms9918a {
     byte vsyncint, hsyncint;
 
     const display *screen;
-    SDL_Texture *picture;
+    SDL_Texture *picture192;
+    SDL_Texture *picture224;
     SDL_PixelFormat *pixelfmt;
     word *buffer16;
 } tms9918a;
@@ -92,7 +98,7 @@ byte tms9918a_readstatus(tms9918a *cpn);
 void tms9918a_writedata(tms9918a *cpn, byte data);
 byte tms9918a_readdata(tms9918a *cpn);
 
-int tms9918a_getscanline(tms9918a *cpn);
+byte tms9918a_getscanline(tms9918a *cpn);
 int tms9918a_getmonitorscanlines(tms9918a *cpn);
 int tms9918a_getslpersecond(tms9918a *cpn);
 

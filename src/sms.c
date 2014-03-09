@@ -24,7 +24,6 @@
 #endif
 
 #include <stdlib.h>
-#include <zip.h>
 
 #include "sms.h"
 #include "clock.h"
@@ -81,6 +80,8 @@ struct _iomap {
 
 static void sms_updatejoypads(mastersystem *sms);
 static string sms_getbackupfilename(mastersystem *sms);
+static void sms_loadrom(mastersystem *sms, const char *rom_path);
+static void sms_loadsnapshot(mastersystem *sms, xmlDocPtr doc);
 
 static byte ms_readmemory(void* param, dword address)
 {
@@ -149,6 +150,39 @@ static void ms_writememory(void* param, dword address, byte data)
     sms->wrmap[address>>13][address&0x1FFF] = data;
     if(address>=0xFFFC)
         ms_writemregister(sms, address & 0x03, data);
+
+#ifdef DEBUG
+    if(address<0xC000)
+        log4me_warning(LOG_EMU_SMS, "write wrong address 0x%04X = 0x%02X\n", address, data);
+#endif
+}
+
+static byte sms_readmemorycodemasters(void* param, dword address)
+{
+    return ((mastersystem*)param)->rdmap[address>>13][address&0x1FFF];
+}
+
+static void sms_writememorycodemasters(void* param, dword address, byte data)
+{
+    mastersystem *sms = (mastersystem*)param;
+
+    sms->wrmap[address>>13][address&0x1FFF] = data;
+    if(address==0x8000) {
+        sms->cmregister = data;
+        sms->rdmap[4] = sms->rom + ((data % sms->rombanks) << 14); // 8ko
+        sms->rdmap[5] = sms->rdmap[4] + 8192; // 8ko
+        return;
+    }
+
+    if((address==0x4000) && (data!=1)) {
+        log4me_error(LOG_EMU_SMS, "write wrong address 0x%04X = 0x%02X\n", address, data);
+        exit(EXIT_FAILURE);
+    }
+
+    if((address==0x0000) && (data!=0)) {
+        log4me_error(LOG_EMU_SMS, "write wrong address 0x%04X = 0x%02X\n", address, data);
+        exit(EXIT_FAILURE);
+    }
 
 #ifdef DEBUG
     if(address<0xC000)
@@ -256,7 +290,7 @@ static void sms_writeio3F(mastersystem *sms, byte data)
         // of origin.  British machines directly copy the values in bits 5 and 7 of port
         // $3F to the nationalisation bits.  Japanese machines appear to complement one
         // or more of these bits, although these details are uncertain.
-        switch(sms->machine) {
+        switch(getrommachine(sms->rspecs)) {
             case JAPAN:
                 if(bit5_is_set(sms->port_3f)) sms->port_dd &= 0xBF; else sms->port_dd |= 0x40;
                 if(bit7_is_set(sms->port_3f)) sms->port_dd &= 0x7F; else sms->port_dd |= 0x80;
@@ -292,7 +326,7 @@ static void sms_initiomapper(mastersystem *sms)
     INIT_IO_MAP(0x3F, NULL          , NULL                  , sms           , sms_writeio3F);
 
     INIT_IO_MAP(0x7E, &sms->vdp     , tms9918a_getscanline  , &sms->snd     , sn76489_write);
-    INIT_IO_MAP(0x7F, &sms->vdp     , tms9918a_getscanline  , &sms->snd     , sn76489_write);
+    INIT_IO_MAP(0x7F, &sms->vdp     , tms9918a_getscanline  , &sms->snd     , sn76489_write); // Read H Counter not implemented
 
     INIT_IO_MAP(0xBE, &sms->vdp     , tms9918a_readdata     , &sms->vdp     , tms9918a_writedata);
     INIT_IO_MAP(0xBD, NULL          , NULL                  , &sms->vdp     , tms9918a_writeop);
@@ -333,7 +367,6 @@ void ms_free(mastersystem *sms)
     tms9918a_free(&sms->vdp);
     clock_release(sms->idclock1s);
     if(sms->iomapper) free(sms->iomapper);
-    if(sms->romfilename) free(sms->romfilename);
     if(sms->romname) free(sms->romname);
     if(sms->rom) free(sms->rom);
     if(sms->lkptsps) free(sms->lkptsps);
@@ -341,9 +374,10 @@ void ms_free(mastersystem *sms)
     free(sms);
 }
 
-mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode, sound_onoff playsound, int joypad1, int joypad2, string backupdir)
+mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, int joypad1, int joypad2, string backupdir)
 {
     int i;
+    segalicense slrom = getromlicense(rspecs);
     mastersystem *sms = calloc(1, sizeof(mastersystem));
     if(sms==NULL) {
         log4me_error(LOG_EMU_SMS, "Unable to allocate the memory block.\n");
@@ -351,14 +385,17 @@ mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode,
     }
     pushobject(sms, ms_free);
 
-    sms->z80 = cpuZ80_create(sms, ms_readmemory, ms_writememory, ms_readio, ms_writeio);
+    assert((slrom==SL_SEGA) || (slrom==SL_CODEMASTERS));
+
+    sms->z80 = cpuZ80_create(sms, slrom==SL_CODEMASTERS ? sms_readmemorycodemasters : ms_readmemory,
+                    slrom==SL_CODEMASTERS ? sms_writememorycodemasters : ms_writememory, ms_readio, ms_writeio);
     if(sms->z80==NULL) {
         log4me_error(LOG_EMU_SMS, "Unable to allocate and initialize the Z80 cpu emulator.\n");
         exit(EXIT_FAILURE);
     }
 
-    sms->machine = machine;
-    sms->clock = vmode==VM_NTSC ? CPU_CLOCK_NTSC : CPU_CLOCK_PAL;
+    sms->rspecs = rspecs;
+    sms->clock = getromvideomode(sms->rspecs)==VM_NTSC ? CPU_CLOCK_NTSC : CPU_CLOCK_PAL;
     sms->cpu = 0;
 
     cpuZ80_reset(sms->z80);
@@ -367,7 +404,6 @@ mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode,
     //memset(sms->mem, 0, MS_MEM_SIZE);
     sms->rom = NULL;
     sms->romname = NULL;
-    sms->romfilename = NULL;
     sms->romlen = 0;
     sms->rombanks = MS_PAGE_SIZE*2; // 32k rom size
 
@@ -383,10 +419,10 @@ mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode,
     // => Software Reference Manual for the SEGA Mark III Console
     // When power is applied, the following data is set by the system ROM program:
     // $FFFF = 2    $FFFE = 1   $FFFD = 0   $FFFC = 0
-    ms_writememory(sms, 0xFFFF, 2);
-    ms_writememory(sms, 0xFFFE, 1);
-    ms_writememory(sms, 0xFFFD, 0);
-    ms_writememory(sms, 0xFFFC, 0);
+    //ms_writememory(sms, 0xFFFF, 2);
+    //ms_writememory(sms, 0xFFFE, 1);
+    //ms_writememory(sms, 0xFFFD, 0);
+    //ms_writememory(sms, 0xFFFC, 0);
 
     //memset(sms->cartridgeram, 0, MS_CARTRIDGE_RAM);
     sms->cartridgeram_detected = 0;
@@ -404,7 +440,7 @@ mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode,
 
     sms->pause = 0;
 
-    tms9918a_init(&sms->vdp, screen, vmode);
+    tms9918a_init(&sms->vdp, screen, getromvideomode(rspecs));
     sms->scanlinespersecond = sms->vdp.framerate * sms->vdp.internalscanlines;
 
     sn76489_init(&sms->snd, sms->clock, sms->scanlinespersecond, playsound);
@@ -425,10 +461,15 @@ mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode,
     for(i=0;i<sms->scanlinespersecond;i++)
         sms->lkptsps[i] = (((uint64_t)sms->clock*(i+1)) / sms->scanlinespersecond) - (((uint64_t)sms->clock*i) / sms->scanlinespersecond);
 
+    sms_loadrom(sms, CSTR(getromfilename(rspecs)));
+
+    if(romhavesnapshot(rspecs))
+        sms_loadsnapshot(sms, getromsnapshot(rspecs));
+
     return sms;
 }
 
-static void ms_loadrominternal(mastersystem *sms, const char *rom_path)
+static void sms_loadrom(mastersystem *sms, const char *rom_path)
 {
     FILE *f;
     char *rname, *romext;
@@ -447,6 +488,7 @@ static void ms_loadrominternal(mastersystem *sms, const char *rom_path)
     strcpy(sms->romname, rname);
     if((romext = strrchr(sms->romname, '.'))!=NULL) *romext = '\0';
     log4me_print("%s\n", sms->romname);
+    log4me_print("Digest   : %s\n", CSTR(getromdigest(sms->rspecs)));
 
     fseek(f, 0, SEEK_END);
     sms->romlen = ftell(f);
@@ -476,13 +518,23 @@ static void ms_loadrominternal(mastersystem *sms, const char *rom_path)
 
     log4me_print("Tag      : %s\n", memcmp(sms->rom + 0x7FF0, SEGA_MS_TAG, strlen(SEGA_MS_TAG))!=0 ? "Not found" : SEGA_MS_TAG);
 
-    ms_writememory(sms, 0xFFFD, 0);
-    ms_writememory(sms, 0xFFFE, 1);
+    int i;
+    switch(getromlicense(sms->rspecs)) {
+        case SL_SEGA:
+            ms_writememory(sms, 0xFFFC, 0);
+            ms_writememory(sms, 0xFFFD, 0);
+            ms_writememory(sms, 0xFFFE, 1);
+            if(sms->romlen>0x8000)
+            ms_writememory(sms, 0xFFFF, 2);
+            break;
+
+        case SL_CODEMASTERS:
+            for(i=0;i<6;i++) sms->rdmap[i] = sms->rom + 8192 * i;
+            sms->cmregister = 2;
+            break;
+    }
 
     sms->port_3e = sms->romlen<=0x8000 ? 0xC8 : 0xA8; // => Software Reference Manual for the SEGA Mark III Console (page 44)
-
-    if(sms->romlen>0x8000)
-        ms_writememory(sms, 0xFFFF, 2);
 
     // Load backup cartridge RAM
     bkpfilename = sms_getbackupfilename(sms);
@@ -502,87 +554,6 @@ error:
         fclose(f);
     log4me_error(LOG_EMU_SMS, "Read ROM failed.\n");
     exit(EXIT_FAILURE);
-}
-
-static void ms_loadromfromzip(mastersystem *sms, const char *rom_path)
-{
-    struct zip *fzip = NULL;
-    struct zip_stat fstat;
-    struct zip_file *file = NULL;
-    FILE *rom = NULL;
-    const char *filename;
-    string tmpfile;
-    byte *buffer = NULL;
-    int i, numfiles;
-    int findrom = 0;
-
-    if((fzip = zip_open(rom_path, ZIP_CHECKCONS, NULL))==NULL) {
-        log4me_error(LOG_EMU_SMS, "Could not open file : %s\n", rom_path);
-        exit(EXIT_FAILURE);
-    }
-
-    numfiles = zip_get_num_files(fzip);
-    for(i=0;i<numfiles;i++) {
-        filename = zip_get_name(fzip, i, ZIP_FL_UNCHANGED);
-        if(strcasecmp(strrchr(filename, '.'), ".sms")==0) {
-            findrom = 1;
-
-            tmpfile = pathcombc(gettemppath(), filename);
-
-            zip_stat_index(fzip, i, 0, &fstat);
-            buffer = malloc(fstat.size);
-
-            // Read zipped ROM
-            if((file = zip_fopen(fzip, fstat.name, ZIP_FL_UNCHANGED))==NULL)
-                goto error;
-            if(zip_fread(file, buffer, fstat.size)!=fstat.size)
-                goto error;
-            zip_fclose(file); file = NULL;
-
-            if((rom = fopen(CSTR(tmpfile), "wb"))==NULL)
-                goto error;
-            fwrite(buffer, fstat.size, 1, rom);
-            fclose(rom);
-
-            free(buffer);
-
-            ms_loadrom(sms, CSTR(tmpfile));
-
-            remove(CSTR(tmpfile));
-            strfree(tmpfile);
-        }
-    }
-
-    zip_close(fzip);
-    if(!findrom) {
-        log4me_error(LOG_EMU_SMS, "Could not find ROM file in archive : %s\n", rom_path);
-        exit(EXIT_FAILURE);
-    }
-    return;
-
-error:
-    free(buffer);
-    if(rom)
-        fclose(rom);
-    if(file)
-        zip_fclose(file);
-    if(fzip)
-        zip_close(fzip);
-
-    log4me_error(LOG_EMU_SMS, "Unable to extract files from the zipped file : %s\n", rom_path);
-    exit(EXIT_FAILURE);
-    return;
-}
-
-void ms_loadrom(mastersystem *sms, const char *rom_path)
-{
-    if(strcasecmp(strrchr(rom_path, '.'), ".zip")==0)
-        ms_loadromfromzip(sms, rom_path);
-    else
-        ms_loadrominternal(sms, rom_path);
-
-    sms->romfilename = malloc(strlen(rom_path) + 1);
-    strcpy(sms->romfilename, rom_path);
 }
 
 void ms_start(mastersystem *sms)
@@ -778,25 +749,38 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
         xmlTextWriterEndElement(writer); /* rom */
 
         xmlTextWriterStartElement(writer, BAD_CAST "romfilename");
-        xmlTextWriterWriteFormatString(writer, "%s", sms->romfilename);
+        xmlTextWriterWriteFormatString(writer, "%s", CSTR(getrommainfilename(sms->rspecs)));
         xmlTextWriterEndElement(writer); /* romfilename */
 
+        xmlTextWriterStartElement(writer, BAD_CAST "digest");
+        xmlTextWriterWriteFormatString(writer, "%s", CSTR(getromdigest(sms->rspecs)));
+        xmlTextWriterEndElement(writer); /* digest */
+
         xmlTextWriterStartElement(writer, BAD_CAST "country");
-        xmlTextWriterWriteFormatString(writer, "%s", sms->machine==JAPAN ? "japan" : "export");
+        xmlTextWriterWriteFormatString(writer, "%s", getrommachine(sms->rspecs)==JAPAN ? "japan" : "export");
         xmlTextWriterEndElement(writer); /* country */
 
         xmlTextWriterStartElement(writer, BAD_CAST "videomode");
-        xmlTextWriterWriteFormatString(writer, "%s", sms->vmode==VM_NTSC ? "ntsc" : "pal");
+        xmlTextWriterWriteFormatString(writer, "%s", getromvideomode(sms->rspecs)==VM_NTSC ? "ntsc" : "pal");
         xmlTextWriterEndElement(writer); /* videmode */
 
-        xmlTextWriterStartElement(writer, BAD_CAST "memregisters");
-            for(i=0;i<MS_REGISTERS;i++) {
-                xmlTextWriterStartElement(writer, BAD_CAST "register");
-                xmlTextWriterWriteFormatAttribute(writer, BAD_CAST "id", "%d", i);
-                xmlTextWriterWriteFormatString(writer, "%02X", sms->mregisters[i]);
-                xmlTextWriterEndElement(writer); /* register */
-            }
-        xmlTextWriterEndElement(writer); /* memregisters */
+        switch(getromlicense(sms->rspecs)) {
+            case SL_SEGA:
+                xmlTextWriterStartElement(writer, BAD_CAST "memregisters");
+                    for(i=0;i<MS_REGISTERS;i++) {
+                        xmlTextWriterStartElement(writer, BAD_CAST "register");
+                        xmlTextWriterWriteFormatAttribute(writer, BAD_CAST "id", "%d", i);
+                        xmlTextWriterWriteFormatString(writer, "%02X", sms->mregisters[i]);
+                        xmlTextWriterEndElement(writer); /* register */
+                }
+                xmlTextWriterEndElement(writer); /* memregisters */
+                break;
+            case SL_CODEMASTERS:
+                xmlTextWriterStartElement(writer, BAD_CAST "cmregister");
+                xmlTextWriterWriteFormatString(writer, "%02X", sms->cmregister);
+                xmlTextWriterEndElement(writer); /* cmregister */
+                break;
+        }
 
         xmlTextWriterStartElement(writer, BAD_CAST "ports");
             xmlTextWriterStartElement(writer, BAD_CAST "port");
@@ -845,10 +829,8 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
     xmlTextWriterEndElement(writer); /* machine */
 }
 
-void sms_loadsnapshot(mastersystem *sms, snapshot *snp)
+static void sms_loadsnapshot(mastersystem *sms, xmlDocPtr doc)
 {
-    xmlDocPtr doc = snp->doc;
-
     xmlNode *rootnode = xmlDocGetRootElement(doc);
     assert(strcasecmp("machine", (const char*)rootnode->name)==0);
     assert(rootnode->next==NULL);
@@ -858,6 +840,10 @@ void sms_loadsnapshot(mastersystem *sms, snapshot *snp)
             XML_ELEMENT_CONTENT("register", child,
                 ms_writemregister(sms, atoi((const char*)xmlGetProp(child, BAD_CAST "id")), (byte)strtoul((const char*)content, NULL, 16));
             )
+        )
+
+        XML_ELEMENT_CONTENT("cmregister", node,
+            sms_writememorycodemasters(sms, 0x8000, (byte)strtoul((const char*)content, NULL, 16));
         )
 
         XML_ELEMENT_ENUM_CHILD("ports", node, child,

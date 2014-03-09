@@ -83,4 +83,9 @@ typedef enum {
     EXPORT
 } tmachine;
 
+typedef enum {
+    SL_SEGA = 0,
+    SL_CODEMASTERS
+} segalicense;
+
 #endif // EMUL_H_INCLUDED

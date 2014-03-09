@@ -7,6 +7,7 @@ typedef struct {
     int fullscreen;
     int marginx, marginy;
     float scale;
+    float minscale;
     SDL_Window *window;
     SDL_Renderer *renderer;
 } display;

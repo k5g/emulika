@@ -37,6 +37,8 @@
 #define TMS_BG_ATTR_FLIPV       0x0400
 #define TMS_BG_ATTR_SPRITE_PAL  0x0800
 
+#define mode224selected(cpn)    ((cpn)->r0_mode4 && !(cpn)->r1_mode3 && (cpn)->r0_mode2 &&  (cpn)->r1_mode1)
+#define mode240selected(cpn)    ((cpn)->r0_mode4 &&  (cpn)->r1_mode3 && (cpn)->r0_mode2 && !(cpn)->r1_mode1)
 
 typedef enum {
     TMS_DRAW_ALL,
@@ -54,6 +56,13 @@ static const int lkp_mod224[512] = {
     M512(0)
 #undef M1
 };
+
+static const int lkp_mod256[512] = {
+#define M1(x) ((x) & 0xFF)
+    M512(0)
+#undef M1
+};
+
 
 static void tms9918a_setregister(tms9918a *cpn, int reg, byte data);
 
@@ -76,9 +85,10 @@ void tms9918a_init(tms9918a *cpn, const display *screen, video_mode vmode)
 
     cpn->screen = screen;
 
-    cpn->picture = SDL_CreateTexture(screen->renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, 192);
+    cpn->picture192 = SDL_CreateTexture(screen->renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, 192);
+    cpn->picture224 = SDL_CreateTexture(screen->renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, 224);
     cpn->pixelfmt = SDL_AllocFormat(SDL_PIXELFORMAT_RGB565);
-    cpn->buffer16 = calloc(256*192, sizeof(word));
+    cpn->buffer16 = calloc(256*224, sizeof(word));
     // TODO: cpn->buffer16==NULL;
 
     // => Sega Master System VDP documentation by Charles MacDonald
@@ -91,6 +101,7 @@ void tms9918a_init(tms9918a *cpn, const display *screen, video_mode vmode)
     cpn->frame = 0;
     cpn->scanline = 0;
     cpn->slcounter = 0xFF; // reg 10
+    cpn->screenheight = 192;
 
     cpn->status = 0;
     cpn->vsyncint = cpn->hsyncint = 0;
@@ -99,7 +110,7 @@ void tms9918a_init(tms9918a *cpn, const display *screen, video_mode vmode)
     // The VDP registers are initialized at power on to the following values
     tms9918a_setregister(cpn, 0x0, 0x36);
     tms9918a_setregister(cpn, 0x1, 0xA0);
-    tms9918a_setregister(cpn, 0x2, 0xFF);
+    tms9918a_setregister(cpn, 0x2, 0xFF); cpn->r2_bgbaseaddr = 0x3800;
     tms9918a_setregister(cpn, 0x3, 0xFF);
     tms9918a_setregister(cpn, 0x4, 0xFF);
     tms9918a_setregister(cpn, 0x5, 0xFF);
@@ -115,9 +126,16 @@ void tms9918a_free(tms9918a *cpn)
     free(cpn->buffer16);
     if(cpn->pixelfmt)
         SDL_FreeFormat(cpn->pixelfmt);
-    if(cpn->picture)
-        SDL_DestroyTexture(cpn->picture);
+    if(cpn->picture192)
+        SDL_DestroyTexture(cpn->picture192);
+    if(cpn->picture224)
+        SDL_DestroyTexture(cpn->picture224);
     clock_release(cpn->idclock);
+}
+
+static int tms9918a_getbgbaseaddr(tms9918a *cpn)
+{
+    return mode224selected(cpn) ? (((cpn->registers[2] & 0xC) << 10) + 0x0700) : ((cpn->registers[2] & 0xE) << 10);
 }
 
 static void tms9918a_setregister(tms9918a *cpn, int reg, byte data)
@@ -126,30 +144,32 @@ static void tms9918a_setregister(tms9918a *cpn, int reg, byte data)
 
     switch(reg) {
         case 0:
-            if(bit0_is_set(data) || bit1_not_set(data) || bit2_not_set(data) || bit3_is_set(data)) {
-                log4me_error(LOG_EMU_SMSVDP, "write register 0 : %x\n", data);
+            if(bit0_is_set(data) || bit1_not_set(data) || bit3_is_set(data)) {
+                log4me_error(LOG_EMU_SMSVDP, "write register 0 : 0x%02X\n", data);
                 exit(EXIT_FAILURE);
             }
 
             cpn->r0_vert_scroll_inhibit = bit7_is_set(data);
-            cpn->r0_hsync_int = bit4_is_set(data);
-            cpn->r0_do_not_display_leftmost_col = bit5_is_set(data);
             cpn->r0_top2rows_no_hscroll = bit6_is_set(data);
-            log4me_debug(LOG_EMU_SMSVDP, "write register 0 : hsyncint=%d, do_not_display_leftmost_col=%d, top2rows_no_hscroll=%d\n", cpn->r0_hsync_int, cpn->r0_do_not_display_leftmost_col, cpn->r0_top2rows_no_hscroll);
+            cpn->r0_do_not_display_leftmost_col = bit5_is_set(data);
+            cpn->r0_hsync_int = bit4_is_set(data);
+            cpn->r0_mode4 = bit2_is_set(data);
+            cpn->r0_mode2 = bit1_is_set(data);
+            log4me_debug(LOG_EMU_SMSVDP, "write register 0 : hsyncint=%d, do_not_display_leftmost_col=%d, top2rows_no_hscroll=%d, mode4=%d, mode2=%d : 0x%02X\n", cpn->r0_hsync_int, cpn->r0_do_not_display_leftmost_col, cpn->r0_top2rows_no_hscroll, cpn->r0_mode4, cpn->r0_mode2, data);
             if(!cpn->r0_hsync_int) cpn->hsyncint = 0;
             break;
 
         case 1:
-            if(((data & 0x10)==0x10) ||
-               ((data & 0x08)==0x08) ||
-               ((data & 0x01)==0x01)) {
+            if(((data & 0x08)==0x08) || ((data & 0x01)==0x01)) {
                 log4me_debug(LOG_EMU_SMSVDP, "write register 1 : 0x%02X\n", data);
                 exit(EXIT_FAILURE);
             } else {
-                cpn->r1_display = ((data & 0x40)==0x40);
-                cpn->r1_vsync_int = ((data & 0x20)==0x20);
-                cpn->r1_8x16sprite = ((data & 0x02)==0x02);
-                log4me_debug(LOG_EMU_SMSVDP, "write register 1 : display=%d, vsyncint=%d, 8x16sprite=%d : 0x%02X\n", cpn->r1_display, cpn->r1_vsync_int, cpn->r1_8x16sprite, data);
+                cpn->r1_display = bit6_is_set(data);
+                cpn->r1_vsync_int = bit5_is_set(data);
+                cpn->r1_mode1 = bit4_is_set(data);
+                cpn->r1_mode3 = bit3_is_set(data);
+                cpn->r1_8x16sprite = bit1_is_set(data);
+                log4me_debug(LOG_EMU_SMSVDP, "write register 1 : display=%d, vsyncint=%d, mode1=%d, mode3=%d, 8x16sprite=%d : 0x%02X\n", cpn->r1_display, cpn->r1_vsync_int, cpn->r1_mode1, cpn->r1_mode3, cpn->r1_8x16sprite, data);
                 if(cpn->r1_vsync_int) {
                     cpn->vsyncint = ((cpn->status & TMS_STATUS_VSYNC)!=0);
                     if(cpn->vsyncint)
@@ -160,15 +180,14 @@ static void tms9918a_setregister(tms9918a *cpn, int reg, byte data)
             break;
 
         case 2:
-            cpn->r2_bgbaseaddr = (data & 0xE) << 10;
-            // TODO: lines==224 or 240
-            log4me_debug(LOG_EMU_SMSVDP, "write register 2 set background base address (0x%04X)\n", cpn->r2_bgbaseaddr);
+            //cpn->r2_bgbaseaddr = (data & 0xE) << 10; => Calculate on scanline 0
+            log4me_debug(LOG_EMU_SMSVDP, "write register 2 set background base address (0x%04X)\n", tms9918a_getbgbaseaddr(cpn));
             break;
 
         case 3: case 4:
             if(data!=0xFF) {
-                log4me_error(LOG_EMU_SMSVDP, "write register %d other than 0xFF not implemented (0x%02X)\n", reg, data);
-                exit(EXIT_FAILURE);
+                log4me_warning(LOG_EMU_SMSVDP, "write register %d other than 0xFF not implemented (0x%02X)\n", reg, data);
+                //exit(EXIT_FAILURE);
             }
             log4me_debug(LOG_EMU_SMSVDP, "write register %d = 0x%02X (%d)\n", reg, data, data);
             break;
@@ -179,10 +198,8 @@ static void tms9918a_setregister(tms9918a *cpn, int reg, byte data)
             break;
 
         case 6:
-#ifdef DEBUG
-            if((data!=0xFF) && (data!=0xFB))
-                log4me_warning(LOG_EMU_SMSVDP, "write register %d other than 0xFF or 0xFB not implemented (0x%02X)\n", reg, data);
-#endif
+            //if((data!=0xFF) && (data!=0xFB))
+            //    log4me_warning(LOG_EMU_SMSVDP, "write register %d other than 0xFF or 0xFB not implemented (0x%02X)\n", reg, data);
             cpn->r6_sprite_base_tiles = (data & 0x04)!=0 ? 256 : 0;
             log4me_debug(LOG_EMU_SMSVDP, "write register 6 set base tiles = 0x%03X (%d)\n", cpn->r6_sprite_base_tiles, cpn->r6_sprite_base_tiles);
             break;
@@ -210,6 +227,11 @@ static void tms9918a_setregister(tms9918a *cpn, int reg, byte data)
         default:
             log4me_warning(LOG_EMU_SMSVDP, "write register %d not implemented : 0x%02X\n", reg, data);
             break;
+    }
+
+    if(mode240selected(cpn)) {
+        log4me_error(LOG_EMU_SMSVDP, "Unable to set video mode 4 with 240 lines => not implemented\n");
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -341,10 +363,11 @@ byte tms9918a_readdata(tms9918a *cpn)
     return ret;
 }
 
-int tms9918a_getscanline(tms9918a *cpn)
+byte tms9918a_getscanline(tms9918a *cpn)
 {
-    log4me_debug(LOG_EMU_SMSVDP, "read scanline : %d\n", cpn->scanline);
-    return cpn->scanline;
+    byte sl = cpn->scanline>=0xFF ? 0xFF : cpn->scanline;
+    log4me_debug(LOG_EMU_SMSVDP, "read scanline : %d (0x%02X)\n", sl, sl);
+    return sl;
 }
 
 int tms9918a_getmonitorscanlines(tms9918a *cpn)
@@ -395,10 +418,13 @@ static void tms9918a_renderline(tms9918a *cpn)
     byte *tilepixels, *sprites, color, spritescollide[256];
     Uint32 *palette;
     int i, j, x, y, sx, sy, sw, ft, tile, tileoffset, spritesonscanline;
+    const int *lkpmodulo;
     tms99818a_fgtile foregroundtiles[TILES_WIDTH_SCREEN];
 
+    lkpmodulo = mode224selected(cpn) ? lkp_mod256 : lkp_mod224;
+
     x = (cpn->r0_top2rows_no_hscroll && (cpn->scanline<16)) ? 0 : cpn->r8_scrollx;
-    y = lkp_mod224[cpn->scanline + cpn->r9_scrolly];
+    y = lkpmodulo[cpn->scanline + cpn->r9_scrolly];
 
     tilesdesc = (word*)(cpn->vram + cpn->r2_bgbaseaddr) + (y >> 3)*TILES_WIDTH_SCREEN;
     tileoffset = (y & 0x7) << 3;
@@ -411,7 +437,7 @@ static void tms9918a_renderline(tms9918a *cpn)
     // Draw background tiles
     for(i=0; i<TILES_WIDTH_SCREEN; i++,tilesdesc++) {
         if((i==TILES_WIDTH_SCREEN-8) && cpn->r0_vert_scroll_inhibit) {
-            y = lkp_mod224[cpn->scanline];
+            y = lkpmodulo[cpn->scanline];
             tilesdesc = (word*)(cpn->vram + cpn->r2_bgbaseaddr) + (y >> 3)*TILES_WIDTH_SCREEN + i;
             tileoffset = (y & 0x7) << 3;
         }
@@ -455,10 +481,10 @@ static void tms9918a_renderline(tms9918a *cpn)
 
     for(i=0;i<64;i++) {
         sy = (int)sprites[i];
-        // TODO:
+        // => Sega Master System VDP documentation by Charles MacDonald
         // If the Y coordinate is set to $D0, then the sprite in question and all remaining sprites of the 64 available will not be drawn. This only works
         // in the 192-line display mode, in the 224 and 240-line modes a Y coordinate of $D0 has no special meaning.
-        if(sy==0xD0) break;
+        if((sy==0xD0) && !mode224selected(cpn)) break;
         if(sy<240) {
             // => Sega Master System VDP documentation by Charles MacDonald
             // The Y coordinate is treated as being plus one, so a value of zero would
@@ -555,19 +581,20 @@ static void tms9918a_flip2d(tms9918a *cpn)
 {
     Uint8 r, g, b;
     SDL_Rect dstrect;
+    SDL_Texture *picture = cpn->screenheight==192 ? cpn->picture192 : cpn->picture224;
 
     dstrect.x = cpn->screen->marginx;
     dstrect.y = cpn->screen->marginy;
     dstrect.w = 256 * cpn->screen->scale;
     dstrect.h = 192 * cpn->screen->scale;
 
-    SDL_UpdateTexture(cpn->picture, NULL, cpn->buffer16, 256*sizeof(word));
+    SDL_UpdateTexture(picture, NULL, cpn->buffer16, 256*sizeof(word));
 
     SDL_GetRGB(cpn->sdlcolors[cpn->r7_bordercolor], cpn->pixelfmt, &r, &g, &b);
     SDL_SetRenderDrawColor(cpn->screen->renderer, r, g, b, 255);
     SDL_RenderClear(cpn->screen->renderer);
 
-    SDL_RenderCopy(cpn->screen->renderer, cpn->picture, NULL, &dstrect);
+    SDL_RenderCopy(cpn->screen->renderer, picture, NULL, &dstrect);
     SDL_RenderPresent(cpn->screen->renderer);
 }
 
@@ -578,7 +605,9 @@ void tms9918a_waitnextframe(tms9918a *cpn)
 
 void tms9918a_execute(tms9918a *cpn)
 {
-    if(cpn->scanline>=192) {
+    assert((cpn->screenheight==192) || (cpn->screenheight==224));
+
+    if(cpn->scanline>=cpn->screenheight) {
         if(++cpn->scanline==cpn->internalscanlines) {
             cpn->scanline = 0;
             clock_step(cpn->idclock);
@@ -589,7 +618,13 @@ void tms9918a_execute(tms9918a *cpn)
     if(cpn->scanline==0) {
         // Reload hsync interrupt counter
         cpn->slcounter = cpn->r10_value;
-        log4me_debug(LOG_EMU_SMSVDP, "start new frame (%d)\n", cpn->frame);
+        cpn->screenheight = mode224selected(cpn) ? 224 : 192;
+#ifdef DEBUG
+        if(cpn->r2_bgbaseaddr!=tms9918a_getbgbaseaddr(cpn))
+            log4me_warning(LOG_EMU_SMSVDP, "Force background base address (0x%04X)\n", tms9918a_getbgbaseaddr(cpn));
+#endif
+        cpn->r2_bgbaseaddr = tms9918a_getbgbaseaddr(cpn);
+        log4me_debug(LOG_EMU_SMSVDP, "start new frame (%d) - %d lines\n", cpn->frame, cpn->screenheight);
     }
 
     tms9918a_renderline(cpn);
@@ -605,7 +640,7 @@ void tms9918a_execute(tms9918a *cpn)
 
     cpn->scanline++;
 
-    if(cpn->scanline==192) {
+    if(cpn->scanline==cpn->screenheight) {
         cpn->status |= TMS_STATUS_VSYNC;
         if(cpn->r1_vsync_int) {
             cpn->vsyncint = 1;
@@ -624,7 +659,7 @@ int tms9918a_int_pending(tms9918a *cpn)
 
 SDL_Surface *tms9918a_takescreenshot(const tms9918a *cpn)
 {
-    return SDL_CreateRGBSurfaceFrom(cpn->buffer16, 256, 192, cpn->pixelfmt->BitsPerPixel, 256*sizeof(word),
+    return SDL_CreateRGBSurfaceFrom(cpn->buffer16, 256, cpn->screenheight, cpn->pixelfmt->BitsPerPixel, 256*sizeof(word),
                                     cpn->pixelfmt->Rmask, cpn->pixelfmt->Gmask, cpn->pixelfmt->Bmask, cpn->pixelfmt->Amask);
 }
 

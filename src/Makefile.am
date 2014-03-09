@@ -12,6 +12,7 @@ emulika_SOURCES = main.c \
 	sn76489.c sn76489.h \
 	screenshot.c screenshot.h \
 	emul.h \
+	rom.c rom.h \
 	snapshot.c snapshot.h \
 	video.c video.h
 

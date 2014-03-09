@@ -8,7 +8,7 @@
 #include "sn76489.h"
 #include "ym2413.h"
 
-#include "snapshot.h"
+#include "rom.h"
 #include "misc/string.h"
 
 #define MS_MEM_SIZE         0x2000    /*  8K */
@@ -36,14 +36,15 @@ typedef struct _mastersystem {
     byte mem[MS_MEM_SIZE];
     byte mnull[8192];
     byte mregisters[MS_REGISTERS]; // 0xFFFC-0xFFFF
+    byte cmregister;
     byte cartridgeram[MS_CARTRIDGE_RAM]; // On-board cartridge RAM
     iomap *iomapper;
 
     byte *rom;
     char *romname;
-    char *romfilename;
     long romlen;
     int rombanks;
+    const romspecs *rspecs;
 
     byte port_3e; // controls the memory enables
     byte port_3f; // automatic nationalisation
@@ -59,8 +60,6 @@ typedef struct _mastersystem {
 
     int clock;
     int cpu;
-    video_mode vmode;
-    tmachine machine;
 
     int *lkptsps; // Lookup table tstates per scanline for 1 second
     int scanlinespersecond;
@@ -75,9 +74,7 @@ typedef struct _mastersystem {
 } mastersystem;
 
 
-mastersystem* ms_init(const display *screen, tmachine machine, video_mode vmode, sound_onoff playsound, int joypad1, int joypad2, string backupdir);
-
-void ms_loadrom(mastersystem *sms, const char *rom_path);
+mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, int joypad1, int joypad2, string backupdir);
 
 void ms_start(mastersystem *sms);
 void ms_execute(mastersystem *sms);
@@ -85,6 +82,5 @@ void ms_pause(mastersystem *sms, int pause);
 int ms_ispaused(mastersystem *sms);
 
 void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer);
-void sms_loadsnapshot(mastersystem *sms, snapshot *snp);
 
 #endif // SMS_H_INCLUDED

@@ -83,7 +83,7 @@ void log4me_error(uint64_t mask, const char *module, const char *s, ...)
 }
 
 #ifdef DEBUG
-void _log4me_warning(uint64_t mask, const char *module, const char *s, ...)
+void log4me_warning(uint64_t mask, const char *module, const char *s, ...)
 {
     va_list argp;
 
@@ -94,7 +94,7 @@ void _log4me_warning(uint64_t mask, const char *module, const char *s, ...)
     va_end(argp);
 }
 
-void _log4me_debug(uint64_t mask, const char *module, const char *s, ...)
+void log4me_debug(uint64_t mask, const char *module, const char *s, ...)
 {
     va_list argp;
 

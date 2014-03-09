@@ -31,6 +31,7 @@
 #include "sms.h"
 #include "string.h"
 #include "input.h"
+#include "rom.h"
 #include "snapshot.h"
 #include "screenshot.h"
 #include "misc/log4me.h"
@@ -57,7 +58,7 @@ typedef struct {
 
 static appenv *getappenv(void);
 void savetiles(mastersystem *sms, const string debugdir);
-void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tmachine *machine, video_mode *vmode, int *nosound, float *scale);
+void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tmachine *machine, video_mode *vmode, int *nosound, float *scale, int *codemasters);
 
 void initmodules(const string basedir)
 {
@@ -90,19 +91,21 @@ int main ( int argc, char** argv )
     int joypads[NJOYSTICKS];
 
     mastersystem *sms = NULL;
-    snapshot *snp = NULL;
     appenv *environment = NULL;
+    romspecs *rspecs = NULL;
 
     display screen;
 
     char *romfilename=NULL;
     int nosound = 0;
+    int codemasters = 0;
 
     tmachine machine = JAPAN;
     video_mode vmode = VM_NTSC;
 
     screen.fullscreen = 0;
     screen.scale = DEFAULT_SCALE;
+    screen.minscale = (float)224.0 / 192;
 
 #ifndef DEBUG
     assert(0);
@@ -115,7 +118,7 @@ int main ( int argc, char** argv )
 #ifdef DEBUG
     log4me_print("  => DEBUG version\n");
 #endif
-    readoptions(argc, argv, &romfilename, &screen.fullscreen, &machine, &vmode, &nosound, &screen.scale);
+    readoptions(argc, argv, &romfilename, &screen.fullscreen, &machine, &vmode, &nosound, &screen.scale, &codemasters);
 
     setvideomode(&screen);
 
@@ -140,30 +143,19 @@ int main ( int argc, char** argv )
     } else
         log4me_print("SDL : No joystick detected\n");
 
+    rspecs = getromspecs(romfilename, machine, vmode, codemasters);
+    machine = getrommachine(rspecs);
+    vmode = getromvideomode(rspecs);
+
     assert((machine==JAPAN) || (machine==EXPORT));
     assert((vmode==VM_NTSC) || (vmode==VM_PAL));
     log4me_print("SMS : Use %s machine with %s video mode\n", machine==EXPORT ? "Export" : "Japan", vmode==VM_PAL ? "PAL" : "NTSC");
 
-    if(issnapshotfile(romfilename)) {
-        snp = readsnapshot(romfilename);
-        romfilename = snp->romfilename;
-        // Force machine configuration
-        machine = snp->machine;
-        vmode = snp->vmode;
-    }
-
-    sms = ms_init(&screen, machine, vmode, nosound ? SND_OFF : SND_ON, joypads[0], joypads[1], environment->backup);
+    sms = ms_init(&screen, rspecs, nosound ? SND_OFF : SND_ON, joypads[0], joypads[1], environment->backup);
     if(sms==NULL) {
         log4me_error(LOG_EMU_MAIN, "Unable to allocate and initialize the SMS emulator.\n");
         exit(EXIT_FAILURE);
     }
-
-    ms_loadrom(sms, romfilename);
-    if(snp) {
-        sms_loadsnapshot(sms, snp);
-        closesnapshot(snp);
-    }
-    romfilename = NULL;
 
     SDL_SetWindowTitle(screen.window, sms->romname);
 
@@ -224,6 +216,7 @@ int main ( int argc, char** argv )
     }
 
     releaseobject(sms);
+    releaseobject(rspecs);
     for(i=0;i<NJOYSTICKS;i++) input_release_pad(joypads[i]);
 
     releaseobject(environment);
@@ -233,21 +226,22 @@ int main ( int argc, char** argv )
 
 void printusage()
 {
-    printf("Usage: "PACKAGE" [OPTIONS] ROM\n");
+    log4me_print("Usage: "PACKAGE" [OPTIONS] ROM\n");
 }
 
 void printhelp()
 {
     printusage();
-    printf("\nOptions:\n");
-    printf("  --fullscreen\t: Set fullscreen mode\n");
-    printf("  --machine MCH\t: Set machine type [japan/export] (default=japan)\n");
-    printf("  --mode TYPE\t: Set video mode NTSC/PAL [ntsc/pal] (default=ntsc)\n");
-    printf("  --nosound\t: Set sound off\n");
-    printf("  --scale NUM\t: Increase the size of the screen by NUM (default=%d)\n", DEFAULT_SCALE);
+    log4me_print("\nOptions:\n");
+    log4me_print("  --fullscreen\t: Set fullscreen mode\n");
+    log4me_print("  --machine MCH\t: Set machine type [japan/export] (default=japan)\n");
+    log4me_print("  --mode TYPE\t: Set video mode NTSC/PAL [ntsc/pal] (default=ntsc)\n");
+    log4me_print("  --nosound\t: Set sound off\n");
+    log4me_print("  --scale NUM\t: Increase the size of the screen by NUM (default=%d)\n", DEFAULT_SCALE);
+    log4me_print("  --codemasters\t: Force the compatibility of Codemasters games\n");
 }
 
-void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tmachine *machine, video_mode *vmode, int *nosound, float *scale)
+void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tmachine *machine, video_mode *vmode, int *nosound, float *scale, int *codemasters)
 {
     int c;
     int option_index;
@@ -258,14 +252,14 @@ void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tma
         {"mode", required_argument, NULL, 'm'},
         {"nosound", no_argument, nosound, 1},
         {"scale", required_argument, NULL, 's'},
+        {"codemasters", no_argument, codemasters, 1},
         {"help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0}
     };
 
     if(argc<=1) {
         printusage();
-        printf("Try '"PACKAGE" --help' for more information.\n");
-        exit(EXIT_FAILURE);
+        log4me_print("Try '"PACKAGE" --help' for more information.\n");
     }
 
     while((c = getopt_long(argc, argv, "", long_options, &option_index))!=-1) {
