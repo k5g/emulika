@@ -23,7 +23,6 @@ void log4me_debug(uint64_t mask, const char *module, const char *s, ...);
 #else
 #define log4me_debug(m,...)     (void)0
 #define log4me_warning(m,...)   (void)0
-//#define log4me_warning(m,...)   _log4me_warning(m,__VA_ARGS__)
 #endif /* DEBUG */
 
 #endif // LOG4ME_H_INCLUDED

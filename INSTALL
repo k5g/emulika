@@ -7,8 +7,9 @@ To build and install Emulika:
 
 
 => Raspberry Pi
-	Build SDL2 without the X11 support or execute it in a non X11 environment.
-		$ ./configure --disable-video-x11
+	Build SDL2 without the X11 and OpenGL support
+		$ ./configure --disable-video-x11 --disable-video-opengl
+	If possible execute Emulika in a non X11 environment.
 
 => Windows (MinGW32)
 	Try to build SDL2 with full DirectX support -> http://www.libsdl.org/extras/win32/mingw32/README.txt

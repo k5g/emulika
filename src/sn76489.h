@@ -12,6 +12,7 @@
 
 typedef struct {
 	SDL_AudioDeviceID dev;
+	soundchannel channels;
 
     int volume[NCHANNELS];
     dword frequency[NCHANNELS];
@@ -22,6 +23,7 @@ typedef struct {
     word lfsr;
     int whitenoise;
     int freqch3_from_ch2;
+    byte distribution;
 
     dword step;
     int samplerate;
@@ -39,10 +41,12 @@ typedef struct {
     int scanlines;
 } sn76489;
 
-void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, sound_onoff playsound);
+void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, soundchannel channels, sound_onoff playsound);
 void sn76489_free(sn76489 *snd);
 
-void sn76489_write(sn76489 *snd, byte data);
+void sn76489_write(sn76489 *snd, byte port, byte data);
+void sn76489_writestereo(sn76489 *snd, byte port, byte data);
+
 void sn76489_execute(sn76489 *snd);
 
 void sn76489_pause(sn76489 *snd, int value);

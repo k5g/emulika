@@ -57,12 +57,13 @@ static void sn76489_SDLmixaudio(void *userdata, Uint8 *stream, int len)
     snd->curpos -= (len >> 1);
 }
 
-void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, sound_onoff playsound)
+void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, soundchannel channels, sound_onoff playsound)
 {
     SDL_AudioSpec fmt, fmthave;
     int i;
 
 	snd->dev = 0;
+	snd->channels = channels;
 
     for(i=0;i<NCHANNELS;i++) snd->volume[i] = 0xF; // volume off
     memset(snd->frequency, 0, sizeof(snd->frequency));
@@ -73,6 +74,7 @@ void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, sound_onoff p
     snd->lfsr = 0x1111;
     snd->whitenoise = 0;
     snd->freqch3_from_ch2 = 0;
+    snd->distribution = 0xFF;
 
     snd->playsound = playsound;
 
@@ -95,7 +97,7 @@ void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, sound_onoff p
 	memset(&fmt, 0, sizeof(SDL_AudioSpec));
     fmt.freq = SND_FREQUENCY;
     fmt.format = AUDIO_S16;
-    fmt.channels = 1;
+    fmt.channels = channels;
     fmt.samples = SDL_SAMPLES;
     fmt.callback = sn76489_SDLmixaudio;
     fmt.userdata = snd;
@@ -117,7 +119,6 @@ void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, sound_onoff p
         log4me_error(LOG_EMU_SN76489, "Unable to open audio: %s\n", SDL_GetError());
         exit(EXIT_FAILURE);
     }
-	log4me_print("SDL : Audio driver (%s)\n", SDL_GetCurrentAudioDriver());
 
 	if(fmthave.samples>fmt.samples)
         log4me_info(LOG_EMU_SN76489, "WARNING !! Possible latency detected.\n");
@@ -137,7 +138,7 @@ void sn76489_free(sn76489 *snd)
     SDL_CloseAudioDevice(snd->dev);
 }
 
-void sn76489_write(sn76489 *snd, byte data)
+void sn76489_write(sn76489 *snd, byte port, byte data)
 {
     int channel;
 
@@ -210,6 +211,12 @@ void sn76489_write(sn76489 *snd, byte data)
     }
 }
 
+void sn76489_writestereo(sn76489 *snd, byte port, byte data)
+{
+    log4me_debug(LOG_EMU_SN76489, "set control the stereo output %02X\n", data);
+    snd->distribution = data;
+}
+
 void sn76489_pause(sn76489 *snd, int value)
 {
     if(snd->playsound==SND_OFF) return;
@@ -229,8 +236,15 @@ static byte parity(word val)
 
 static void sn76489_internalmixaudio(sn76489 *snd)
 {
-    int i;
+    int i, ch;
     short sound = 0;
+    byte distribution = snd->distribution;
+
+    assert((snd->channels==1) || (snd->channels==2));
+    if((snd->curpos + snd->channels - 1) >= SDL_BUF_SIZE) {
+        snd->curpos = 0;
+        log4me_warning(LOG_EMU_SN76489, "audio buffer is full\n");
+    }
 
     for(i=0;i<NCHANNELS;i++) {
         // Recalculate compute if frequency channel changed
@@ -248,25 +262,24 @@ static void sn76489_internalmixaudio(sn76489 *snd)
             } else
                 snd->polarity[i] ^= 1;
         }
-
-        if(i==3) {
-            sound += snd->polarity[i]==1 ? volume_table[snd->volume[i]] : 0;
-        } else {
-            // => http://www.smspower.org/Development/SN76489 / How the SN76489 makes sound
-            // If the register value is zero or one then the output is a constant value of +1. This is often used for sample playback on the SN76489.
-            if(snd->frequency[i]<=1) snd->polarity[i] = 1;
-
-            sound += (snd->polarity[i] ? -volume_table[snd->volume[i]] : volume_table[snd->volume[i]]);
-        }
-    }
-
-    if(snd->curpos>=SDL_BUF_SIZE) {
-        snd->curpos = 0;
-        log4me_warning(LOG_EMU_SN76489, "audio buffer is full\n");
     }
 
     SDL_LockAudioDevice(snd->dev);
-    snd->buffer[snd->curpos++] = sound;
+    for(ch=0; ch<snd->channels; ch++) {
+        for(i=0,sound=0; i<NCHANNELS; i++,distribution>>=1) {
+            if((distribution & 1)==0) continue;
+            if(i==3) {
+                sound += snd->polarity[i]==1 ? volume_table[snd->volume[i]] : 0;
+            } else {
+                // => http://www.smspower.org/Development/SN76489 / How the SN76489 makes sound
+                // If the register value is zero or one then the output is a constant value of +1. This is often used for sample playback on the SN76489.
+                if(snd->frequency[i]<=1) snd->polarity[i] = 1;
+
+                sound += (snd->polarity[i] ? -volume_table[snd->volume[i]] : volume_table[snd->volume[i]]);
+            }
+        }
+        snd->buffer[snd->curpos++] = sound;
+    }
     SDL_UnlockAudioDevice(snd->dev);
 
     snd->samplerate++;
@@ -325,6 +338,10 @@ void sn76489_takesnapshot(sn76489 *snd, xmlTextWriterPtr writer)
         xmlTextWriterWriteFormatString(writer, "%02X", snd->freqch3_from_ch2);
         xmlTextWriterEndElement(writer); /* freqch3_from_ch2 */
 
+        xmlTextWriterStartElement(writer, BAD_CAST "distribution");
+        xmlTextWriterWriteFormatString(writer, "%02X", snd->distribution);
+        xmlTextWriterEndElement(writer); /* distribution */
+
         if(snd->playsound==SND_ON)
             xmlTextWriterWriteArray(writer, "buffer", (byte*)snd->buffer, snd->curpos*2);
 
@@ -368,6 +385,10 @@ void sn76489_loadsnapshot(sn76489 *snd, xmlNode *sndnode)
 
         XML_ELEMENT_CONTENT("freqch3_from_ch2", node,
             snd->freqch3_from_ch2 = (byte)strtoul((const char*)content, NULL, 16);
+        )
+
+        XML_ELEMENT_CONTENT("distribution", node,
+            snd->distribution = (byte)strtoul((const char*)content, NULL, 16);
         )
 
         XML_ELEMENT("buffer", node,

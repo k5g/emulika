@@ -3,9 +3,12 @@
 
 #include "emul.h"
 
+#define DEFAULT_MARGIN  10
+
 typedef struct {
     int fullscreen;
-    int marginx, marginy;
+    int width, height;
+    int margin, marginx, marginy;
     float scale;
     float minscale;
     SDL_Window *window;
@@ -14,5 +17,8 @@ typedef struct {
 
 void video_init(void);
 void setvideomode(display *screen);
+SDL_Window *getcurrentwindow(void);
+const char *getcurrentrendererdriver(void);
+const char *getcurrentvideodriver(void);
 
 #endif // VIDEO_H_INCLUDED

@@ -10,6 +10,6 @@ typedef struct {
 void ym2413_init(ym2413 *cpn);
 void ym2413_free();
 
-void ym2413_write(ym2413 *cpn, byte data);
+void ym2413_write(ym2413 *cpn, byte port, byte data);
 
 #endif // YM2413_H_INCLUDED

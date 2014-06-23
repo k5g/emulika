@@ -26,13 +26,13 @@
 #include "video.h"
 #include "misc/exit.h"
 
-#define MARGIN  10
 #define DEFAULT_DMODE_W 640
 #define DEFAULT_DMODE_H 480
 
 SDL_DisplayMode _desktopmode;
 SDL_Window *_window = NULL;
 SDL_Renderer *_renderer = NULL;
+SDL_RendererInfo _rendererinfo;
 int _fixedres = 0;
 byte _vfullscreen = 0;
 float _vscale = 1;
@@ -49,6 +49,7 @@ void video_init()
 
     pushexit(video_free);
 
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 #ifdef RASPBERRYPI
     SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2"); // Force opengles2 on the raspberry pi plateform
 #endif
@@ -87,6 +88,8 @@ void video_init()
         exit(EXIT_FAILURE);
     }
 
+    memset(&_rendererinfo, 0, sizeof(_rendererinfo));
+    SDL_GetRendererInfo(_renderer, &_rendererinfo);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
     SDL_SetRenderDrawColor(_renderer, 0, 0, 0, 255);
@@ -99,8 +102,8 @@ void video_init()
 
 void setvideomode(display *screen)
 {
-    int fsscale,width, height;
-    float mscale = screen->minscale<1.0 ? 1.0 : screen->minscale;
+    int width, height;
+    float fsscale, mscale = screen->minscale<1.0 ? 1.0 : screen->minscale;
 
     screen->window = _window;
     screen->renderer = _renderer;
@@ -115,33 +118,48 @@ void setvideomode(display *screen)
             SDL_SetWindowFullscreen(screen->window, screen->fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
     } else {
         if(screen->scale<mscale) screen->scale = mscale;
-        if(screen->scale>=MIN(_desktopmode.w/256, _desktopmode.h/192)) screen->scale = MIN(_desktopmode.w/256, _desktopmode.h/192);
+        if(screen->scale>=MIN(_desktopmode.w/screen->width, _desktopmode.h/screen->height)) screen->scale = MIN(_desktopmode.w/screen->width, _desktopmode.h/screen->height);
     }
 
     switch(screen->fullscreen) {
         case 0:
-            width = (256 + 2*MARGIN) * screen->scale;
-            height = (192 + 2*MARGIN) * screen->scale;
+            width = (screen->width + 2*screen->margin) * screen->scale;
+            height = (screen->height + 2*screen->margin) * screen->scale;
             if(_fixedres) {
-                screen->marginx = (_desktopmode.w - 256*screen->scale) / 2;
-                screen->marginy = (_desktopmode.h - 192*screen->scale) / 2;
+                screen->marginx = (_desktopmode.w - screen->width*screen->scale) / 2;
+                screen->marginy = (_desktopmode.h - screen->height*screen->scale) / 2;
             } else {
-                screen->marginx = MARGIN * screen->scale;
-                screen->marginy = MARGIN * screen->scale;
+                screen->marginx = screen->margin * screen->scale;
+                screen->marginy = screen->margin * screen->scale;
                 SDL_SetWindowSize(screen->window, width, height);
             }
             break;
         case 1:
             width = _desktopmode.w;
             height = _desktopmode.h;
-            fsscale = MIN(width/256, height/192);
-            screen->marginx = (width - 256*fsscale) / 2;
-            screen->marginy = (height - 192*fsscale) / 2;
+            fsscale = MIN((float)width/screen->width, (float)height/screen->height);
+            screen->marginx = (width - screen->width*fsscale) / 2;
+            screen->marginy = (height - screen->height*fsscale) / 2;
             screen->scale = fsscale;
             break;
     }
 
     SDL_ShowCursor(screen->fullscreen || _fixedres ? 0 : 1);
     SDL_ShowWindow(screen->window);
+}
+
+SDL_Window *getcurrentwindow()
+{
+    return _window;
+}
+
+const char *getcurrentrendererdriver()
+{
+    return _rendererinfo.name;
+}
+
+const char *getcurrentvideodriver()
+{
+    return SDL_GetCurrentVideoDriver();
 }
 

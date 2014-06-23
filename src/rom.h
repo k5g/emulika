@@ -16,6 +16,10 @@ video_mode getromvideomode(const romspecs *rom);
 void *getromsnapshot(const romspecs *rom);
 const string getromdigest(const romspecs *rom);
 int romhavesnapshot(const romspecs *rom);
-segalicense getromlicense(const romspecs *rom);
+memorymapper getrommemorymapper(const romspecs *rom);
+gameconsole getromgameconsole(const romspecs *rom);
+long getromlength(const romspecs *rom);
+size_t readromdata(const romspecs *rom, long offset, byte *buffer, size_t buflen);
+string getromname(const romspecs *rom);
 
 #endif // ROM_H_INCLUDED

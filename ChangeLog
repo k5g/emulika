@@ -2,12 +2,16 @@
 E M U L I K A
 =============
 
+23/06/2014 : v0.2.0
+-------------------
+* Added support of Game Gear games
 
-09/03/2012 : v0.1.1
+
+09/03/2014 : v0.1.1
 -------------------
 * Added compatibility with Codemasters games (except for Cosmic Spacehead)
 
 
-28/02/2012 : v0.1.0
+28/02/2014 : v0.1.0
 -------------------
 * First release

@@ -52,7 +52,7 @@ void takesnapshot(mastersystem *sms, const string snapshotsdir)
     string screenshotfilename = pathcombc(gettemppath(), SCREENSHOT);
     savescreenshot(sms, screenshotfilename);
 
-    string filename = gettimedfilename(sms->romname, NULL);
+    string filename = gettimedfilename(CSTR(sms->romname), NULL);
     string zipfilename = pathcombs(strdups(snapshotsdir), filename);
     straddc(zipfilename, ".zip");
 

@@ -2,7 +2,7 @@
 E M U L I K A
 =============
 
-Emulika is another emulator for the Sega Master System console.
+Emulika is another emulator for the Sega Master System and Game Gear console.
 
 Emulika does not aim to be different from others emulators, it was written just for fun and also probably with a little of nostalgia.
 
@@ -36,12 +36,12 @@ Player 2 :
 	Button 1 : 0
 	Button 2 : .
 	
-Key P	: Pause
-Key R	: Software reset
-Key S	: Snapshot
-Key H	: Screenshot
+Key R	: Software reset (Master System)
+Key S	: Pause (Master System) / Start/Pause (Game Gear)
 Key F2	: Decrease window size
 Key F3	: Increase window size
 Key F4	: Toggle windowed mode / fullscreen
+Key F9	: Snapshot
+Key F10	: Screenshot
 Key ESC	: Quit
 

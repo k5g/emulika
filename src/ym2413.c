@@ -32,7 +32,7 @@ void ym2413_free()
 
 }
 
-void ym2413_write(ym2413 *cpn, byte data)
+void ym2413_write(ym2413 *cpn, byte port, byte data)
 {
     if(cpn->data==0) {
         cpn->data++;

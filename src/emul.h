@@ -23,9 +23,11 @@
 #define LOG_EMU_SN76489         LOG_EMU_SN76489_MASK, "SN7"
 #define LOG_EMU_YM2413_MASK     0x0040
 #define LOG_EMU_YM2413          LOG_EMU_YM2413_MASK , "YM2"
-#define LOG_EMU_JOYSTICK_MASK   0x0080
+#define LOG_EMU_EEPROM_MASK     0x0080
+#define LOG_EMU_EEPROM          LOG_EMU_EEPROM_MASK , "EEP"
+#define LOG_EMU_JOYSTICK_MASK   0x0100
 #define LOG_EMU_JOYSTICK        LOG_EMU_JOYSTICK_MASK,"JOY"
-#define LOG_EMU_SNAPSHOT_MASK   0x0100
+#define LOG_EMU_SNAPSHOT_MASK   0x0200
 #define LOG_EMU_SNAPSHOT        LOG_EMU_SNAPSHOT_MASK,"SNP"
 
 #define LOG_EMU_ALL             0xFFFF
@@ -68,10 +70,17 @@
 #define MIN(a, b)       ((a)>(b) ? (b) : (a))
 #define ABS(a)          ((a)<0 ? (-(a)) : (a))
 
+#define UNDEFINED       (-1)
+
 typedef enum {
     SND_OFF,
     SND_ON
 } sound_onoff;
+
+typedef enum {
+    SC_MONO = 1,
+    SC_STEREO = 2
+} soundchannel;
 
 typedef enum {
     VM_NTSC = 0,
@@ -84,8 +93,15 @@ typedef enum {
 } tmachine;
 
 typedef enum {
-    SL_SEGA = 0,
-    SL_CODEMASTERS
-} segalicense;
+    MM_SEGA = 0,
+    MM_SEGA_EEPROM,
+    MM_CODEMASTERS
+} memorymapper;
+
+typedef enum {
+    GC_UNDEFINED = 0,
+    GC_SMS,     /* Sega Master Sytem */
+    GC_GG       /* Sega Game Gear */
+} gameconsole;
 
 #endif // EMUL_H_INCLUDED

@@ -12,6 +12,8 @@
 #define TMS_REGISTERS   16
 #define TMS_COLORS      32
 
+#define TMS_CRAM_SIZE   64 /* SMS:32 GG:64 */
+
 #define TMS_VRAM_SIZE   0x4000
 #define TMS_VRAM_TILES_OFS      0x0000
 
@@ -24,10 +26,12 @@ typedef enum {
 
 typedef struct _tms9918a {
     byte registers[TMS_REGISTERS];
-    byte colors[TMS_COLORS];
+    byte cram[TMS_CRAM_SIZE]; // 32 bytes for SMS / 64 bytes for GG
     byte vram[TMS_VRAM_SIZE];
 
     Uint32 sdlcolors[TMS_COLORS];
+
+    gameconsole gconsole;   // SMS or GG
 
     dword *tiles[512];
     dword tiles_desc[512][(8*8)/4];
@@ -45,10 +49,13 @@ typedef struct _tms9918a {
     dword flagsetop;
 
     int color_index;
+    int crammask;
+    int cramsize;
     word vram_addr;
     byte read_buffer;
 
     sdlclock idclock;
+    video_mode vmode;
     int framerate;
     int internalscanlines;
     int frame;
@@ -68,6 +75,7 @@ typedef struct _tms9918a {
     int r1_8x16sprite;
     int r1_mode3;
     int r1_mode1;
+    int r1_zoomedsprites;
 
     int r2_bgbaseaddr;
 
@@ -83,22 +91,26 @@ typedef struct _tms9918a {
     byte vsyncint, hsyncint;
 
     const display *screen;
-    SDL_Texture *picture192;
-    SDL_Texture *picture224;
+    const SDL_Rect *ggrect;
+    SDL_Texture *picture;
     SDL_PixelFormat *pixelfmt;
     word *buffer16;
+
+#ifdef DEBUG
+    int showpalette;
+#endif
 } tms9918a;
 
-void tms9918a_init(tms9918a *cpn, const display *screen, video_mode vmode);
+void tms9918a_init(tms9918a *cpn, gameconsole gconsole, const display *screen, video_mode vmode);
 void tms9918a_free(tms9918a *cpn);
 
-void tms9918a_writeop(tms9918a *cpn, byte val);
-byte tms9918a_readstatus(tms9918a *cpn);
+void tms9918a_writeop(tms9918a *cpn, byte port, byte data);
+byte tms9918a_readstatus(tms9918a *cpn, byte port);
 
-void tms9918a_writedata(tms9918a *cpn, byte data);
-byte tms9918a_readdata(tms9918a *cpn);
+void tms9918a_writedata(tms9918a *cpn, byte port, byte data);
+byte tms9918a_readdata(tms9918a *cpn, byte port);
 
-byte tms9918a_getscanline(tms9918a *cpn);
+byte tms9918a_getscanline(tms9918a *cpn, byte port);
 int tms9918a_getmonitorscanlines(tms9918a *cpn);
 int tms9918a_getslpersecond(tms9918a *cpn);
 
@@ -115,6 +127,7 @@ void tms9918a_loadsnapshot(tms9918a *cpn, xmlNode *vdpnode);
 
 #ifdef DEBUG
 void tms9918a_save_tiles(tms9918a *cpn, const string filename);
+void tms9918a_toggledisplaypalette(tms9918a *cpn);
 #endif
 
 #endif // TMS9918A_H_INCLUDED

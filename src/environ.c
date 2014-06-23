@@ -152,3 +152,14 @@ void createdirectory(const string dir)
         exit(EXIT_FAILURE);
     }
 }
+
+int fileexists(const string filename)
+{
+    FILE *f;
+
+    if((f = fopen(CSTR(filename), "rb"))==NULL)
+        return 0;
+
+    fclose(f);
+    return 1;
+}

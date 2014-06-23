@@ -35,7 +35,7 @@ int savescreenshot(const mastersystem *sms, const string filename)
 
 void takescreenshot(const mastersystem *sms, const string screenshotsdir)
 {
-    string filename = gettimedfilename(sms->romname, "bmp");
+    string filename = gettimedfilename(CSTR(sms->romname), "bmp");
     string fullfilename = pathcombs(strdups(screenshotsdir), filename);
 
     int res = savescreenshot(sms, fullfilename);

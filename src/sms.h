@@ -4,8 +4,9 @@
 #include <SDL.h>
 
 #include "cpu/z80.h"
-#include "tms9918a.h"
+#include "seeprom.h"
 #include "sn76489.h"
+#include "tms9918a.h"
 #include "ym2413.h"
 
 #include "rom.h"
@@ -24,6 +25,7 @@
 #define MS_ADDR_RAM_SEL_REG 0xFFFC
 #define MS_ADDR_SET_PAGE2   0xFFFF
 
+#define MS_GG_NUM_PORTS     6
 
 struct _iomap;
 typedef struct _iomap iomap;
@@ -41,11 +43,14 @@ typedef struct _mastersystem {
     iomap *iomapper;
 
     byte *rom;
-    char *romname;
+    string romname;
     long romlen;
     int rombanks;
     const romspecs *rspecs;
+    gameconsole gconsole;
+    seeprom *mc93c46;
 
+    byte ports[MS_GG_NUM_PORTS]; // game gear only
     byte port_3e; // controls the memory enables
     byte port_3f; // automatic nationalisation
     byte port_dc; // joypad port 1
@@ -63,6 +68,8 @@ typedef struct _mastersystem {
 
     int *lkptsps; // Lookup table tstates per scanline for 1 second
     int scanlinespersecond;
+    int curscanlineps;
+    int tstates;
 
     int joystick1;
     int joystick2;

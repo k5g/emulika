@@ -30,10 +30,17 @@
 #include "misc/string.h"
 #include "misc/xml.h"
 
+#define SMS_HEADER_LEN  16
+
 struct _romspecs {
     string filename;
     string romfilename;
     string digest;
+
+    FILE *f;
+    long length;
+    long skipheader;
+    char *header;
 
     xmlDocPtr doc; // XML document
     video_mode vmode;
@@ -41,7 +48,8 @@ struct _romspecs {
 
     byte zippedrom;
     byte deleterom;
-    segalicense license;
+    memorymapper mmapper;
+    gameconsole gconsole;
 };
 
 static int fzip2buffer(struct zip *fzip, int index, byte **buffer)
@@ -171,7 +179,8 @@ static void readzipfile(romspecs *rspecs)
     for(i=0; i<numfiles; i++) {
         filename = zip_get_name(fzip, i, ZIP_FL_UNCHANGED);
 
-        if(strcasecmp(strrchr(filename, '.'), ".sms")==0) {
+        if((strcasecmp(strrchr(filename, '.'), ".sms")==0) ||
+           (strcasecmp(strrchr(filename, '.'), ".gg" )==0)) {
             findrom = 1;
             error |= (readzippedrom(fzip, i, rspecs)==0);
             break;
@@ -206,6 +215,25 @@ static void readzipfile(romspecs *rspecs)
     }
 }
 
+static void readheader(romspecs *rom)
+{
+    assert(rom->f);
+
+    fseek(rom->f, 0, SEEK_END);
+    rom->length = ftell(rom->f);
+
+    rom->skipheader = rom->length % MS_PAGE_SIZE;
+    rom->length -= rom->skipheader;
+
+    fseek(rom->f, rom->skipheader + (rom->length<=MS_PAGE_SIZE ? 0x3FF0 : 0x7FF0), SEEK_SET);
+    rom->header = malloc(SMS_HEADER_LEN);
+
+    if(fread(rom->header, sizeof(char), SMS_HEADER_LEN, rom->f)!=SMS_HEADER_LEN) {
+        free(rom->header);
+        rom->header = NULL;
+    }
+}
+
 static void freeromspecs(romspecs *rom)
 {
     if(rom->deleterom) {
@@ -218,6 +246,11 @@ static void freeromspecs(romspecs *rom)
         xmlCleanupParser();
         xmlMemoryDump();
     }
+
+    free(rom->header);
+
+    if(rom->f)
+        fclose(rom->f);
 
     strfree(rom->digest);
     strfree(rom->romfilename);
@@ -259,9 +292,40 @@ const string getromdigest(const romspecs *rom)
     return rom->digest;
 }
 
-segalicense getromlicense(const romspecs *rom)
+memorymapper getrommemorymapper(const romspecs *rom)
 {
-    return rom->license;
+    return rom->mmapper;
+}
+
+gameconsole getromgameconsole(const romspecs *rom)
+{
+    return rom->gconsole;
+}
+
+long getromlength(const romspecs *rom)
+{
+    return rom->length;
+}
+
+size_t readromdata(const romspecs *rom, long offset, byte *buffer, size_t buflen)
+{
+    fseek(rom->f, rom->skipheader + offset, SEEK_SET);
+    return fread(buffer, sizeof(byte), buflen, rom->f);
+}
+
+string getromname(const romspecs *rom)
+{
+    char *rname, *rext;
+    char *romfilename = strdupc(rom->romfilename);
+    string romname;
+
+    rname = (rname = strrchr(romfilename, CHR_PATH_SEPARATOR))==NULL ? romfilename : rname + 1;
+    if((rext = strrchr(rname, '.'))!=NULL) *rext = '\0';
+
+    romname = strcrec(rname);
+    free(romfilename);
+
+    return romname;
 }
 
 romspecs *getromspecs(const char *filename, tmachine defmachine, video_mode defvmode, int defcodemasters)
@@ -269,13 +333,13 @@ romspecs *getromspecs(const char *filename, tmachine defmachine, video_mode defv
     romspecs *rom = calloc(1, sizeof(romspecs));
     pushobject(rom, freeromspecs);
 
-    rom->license = SL_SEGA;
+    rom->mmapper = MM_SEGA;
     rom->filename = strcrec(filename);
     rom->zippedrom = (strcasecmp(strrchr(filename, '.'), ".zip")==0);
     rom->machine = defmachine;
     rom->vmode = defvmode;
     if(defcodemasters)
-        rom->license = SL_CODEMASTERS;
+        rom->mmapper = MM_CODEMASTERS;
 
     if(rom->zippedrom)
         readzipfile(rom);
@@ -284,11 +348,101 @@ romspecs *getromspecs(const char *filename, tmachine defmachine, video_mode defv
 
     rom->digest = sha1sum(rom->romfilename);
 
-    if(rom->digest && (
-      (strcmp(CSTR(rom->digest), "f46f716dd34a1a5013a2d8a59769f6ef7536a567")==0) /* Cosmic Spacehead (UE) [!] */ ||
-      (strcmp(CSTR(rom->digest), "425621f350d011fd021850238c6de9999625fd69")==0) /* Micro Machines (E) [!] */ ||
-      (strcmp(CSTR(rom->digest), "4202ce26832046c7ca8209240f097a8a0a84d981")==0) /* Fantastic Dizzy */ ))
-        rom->license = SL_CODEMASTERS;
+    // Detect game console
+    rom->gconsole = GC_UNDEFINED;
+
+    const char *ext = strrchr(CSTR(rom->romfilename), '.');
+    if(strcasecmp(ext, ".sms")==0) rom->gconsole = GC_SMS; else
+    if(strcasecmp(ext, ".gg" )==0) rom->gconsole = GC_GG;
+
+    // Read header
+    if((rom->f = fopen(CSTR(rom->romfilename), "rb"))==NULL) {
+        log4me_error(LOG_EMU_MAIN, "File not found : %s\n", CSTR(rom->romfilename));
+        exit(EXIT_FAILURE);
+    }
+    readheader(rom);
+
+    switch(rom->gconsole) {
+        case GC_UNDEFINED:
+            break;
+        case GC_SMS:
+            rom->machine = defmachine==UNDEFINED ? JAPAN : defmachine;
+            rom->vmode = defvmode==UNDEFINED ? VM_NTSC : defvmode;
+            break;
+        case GC_GG:
+            if(rom->header) {
+                // => Sega Master System and Game Gear Architecture by Marat Fayzullin
+                // The GG cartridges also have a data byte which contains information on
+                // the ROM size and the market for which cartridge has been manufactured.
+                // This byte is located at address 7FFFh (3FFFh in page #1 for mapped
+                // cartridges) and its bits have the following meaning:
+                // bit   Function
+                // 7-4   Country Code
+                //       0101  Japan
+                //       0110  Japan, USA, Europe
+                //       0111  USA, Europe
+                switch(rom->header[0xF] >> 4) {
+                    case 0x5: // Japan
+                        rom->machine = JAPAN;
+                        break;
+                    case 0x6: // Japan, USA, Europe
+                    case 0x7: // USA, Europe
+                        rom->machine = EXPORT;
+                        break;
+                    default:
+                        rom->machine = JAPAN;
+                        break;
+                }
+            } else
+                rom->machine = JAPAN;
+
+            if(defmachine!=UNDEFINED)
+                rom->machine = defmachine;
+
+            rom->vmode = VM_NTSC; // Force NTSC with Game Gear games
+            break;
+    }
+
+    const tmachine machexport = EXPORT;
+    const video_mode vmntsc = VM_NTSC;
+    const video_mode vmpal = VM_PAL;
+    const memorymapper mmcodemasters = MM_CODEMASTERS;
+    const memorymapper mmsegaeeprom = MM_SEGA_EEPROM;
+    const struct {
+        const tmachine *machine;
+        const video_mode *vmode;
+        const memorymapper *mmapper;
+        const char *digest;
+    } games[] = {
+        { &machexport   , &vmpal    , NULL          , "3fc6ccc556a1e4eb376f77eef8f16b1ff76a17d0" },     /* SMS - Addams Family, The (UE) [!]        */
+        { NULL          , NULL      , &mmcodemasters, "f46f716dd34a1a5013a2d8a59769f6ef7536a567" },     /* SMS - Cosmic Spacehead (UE) [!]          */
+        { NULL          , NULL      , &mmcodemasters, "4202ce26832046c7ca8209240f097a8a0a84d981" },     /* SMS - Fantastic Dizzy                    */
+        { &machexport   , &vmpal    , &mmcodemasters, "425621f350d011fd021850238c6de9999625fd69" },     /* SMS - Micro Machines (E) [!]             */
+        { &machexport   , &vmpal    , NULL          , "3bcffd47294f25b25cccb7f42c3a9c3f74333d73" },     /* SMS - Power Strike II (Europe)           */
+        { NULL          , &vmntsc   , &mmcodemasters, "b78bc3fe6bfbc7d6f5e85d59d79be19bf7372bcc" },     /* GG  - Drop Zone (U) [!]                  */
+        { NULL          , &vmntsc   , &mmsegaeeprom , "76f3c504d717067134a88f7f1d0ef38bd6698e50" },     /* GG  - Majors Pro Baseball (UE) [!]       */
+        { NULL          , &vmntsc   , &mmcodemasters, "b167fda9f0e7a6a47027f782a08149e8d4f46e0c" },     /* GG  - Man Overboard (UE) [!]             */
+        { NULL          , &vmntsc   , &mmcodemasters, "7b2d39b68622e18eac6c27fd961133b1d002342b" },     /* GG  - Micro Machines                     */
+        { NULL          , &vmntsc   , &mmcodemasters, "ab9b4c833207824efb14b712b4ec82721c8436bc" },     /* GG  - Pete Sampras Tennis (E) [!]        */
+        { NULL          , &vmntsc   , &mmsegaeeprom , "66d31ed6bb6dfedd769bf5e6c5dcbf899f2f2c8c" },     /* GG  - World Series Baseball '95 (UE) [!] */
+        { NULL          , &vmntsc   , &mmsegaeeprom , "333dd99f11781d6de5720043530a460a409d652b" },     /* GG  - World Series Baseball (UE) [a1][!] */
+        { NULL          , &vmntsc   , &mmsegaeeprom , "ccfd03edf130f28e6bb4c2764df7ace7bbe9e159" },     /* GG  - World Series Baseball (UE) [!]     */
+        { NULL          , NULL      , NULL          , NULL                                       }
+    };
+
+    if(rom->digest) {
+        int i;
+        for(i=0; games[i].digest; i++) {
+            if(strcmp(CSTR(rom->digest), games[i].digest)!=0) continue;
+
+            if(games[i].machine!=NULL)
+                rom->machine = *games[i].machine;
+            if(games[i].vmode!=NULL)
+                rom->vmode = *games[i].vmode;
+            if(games[i].mmapper!=NULL)
+                rom->mmapper = *games[i].mmapper;
+        }
+    }
 
     return rom;
 }

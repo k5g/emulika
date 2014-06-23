@@ -30,6 +30,7 @@
 #include "emul.h"
 #include "sms.h"
 #include "string.h"
+#include "icon.h"
 #include "input.h"
 #include "rom.h"
 #include "snapshot.h"
@@ -83,6 +84,8 @@ void initmodules(const string basedir)
 
     video_init();
     input_init();
+
+    seticon(getcurrentwindow());
 }
 
 int main ( int argc, char** argv )
@@ -95,13 +98,14 @@ int main ( int argc, char** argv )
     romspecs *rspecs = NULL;
 
     display screen;
+    SDL_version sdlvers;
 
     char *romfilename=NULL;
     int nosound = 0;
     int codemasters = 0;
 
-    tmachine machine = JAPAN;
-    video_mode vmode = VM_NTSC;
+    tmachine machine = UNDEFINED;
+    video_mode vmode = UNDEFINED;
 
     screen.fullscreen = 0;
     screen.scale = DEFAULT_SCALE;
@@ -120,12 +124,11 @@ int main ( int argc, char** argv )
 #endif
     readoptions(argc, argv, &romfilename, &screen.fullscreen, &machine, &vmode, &nosound, &screen.scale, &codemasters);
 
-    setvideomode(&screen);
-
-    SDL_RendererInfo info;
-    SDL_GetRendererInfo( screen.renderer, &info);
-    log4me_print("SDL : Video driver (%s)\n", SDL_GetCurrentVideoDriver());
-    log4me_print("SDL : Rendered driver (%s)\n", info.name);
+    SDL_GetVersion(&sdlvers);
+    log4me_print("SDL : %d.%d.%d\n", sdlvers.major, sdlvers.minor, sdlvers.patch);
+    log4me_print("SDL : Video driver (%s)\n", getcurrentvideodriver());
+    log4me_print("SDL : Rendered driver (%s)\n", getcurrentrendererdriver());
+    log4me_print("SDL : Audio driver (%s)\n", SDL_GetCurrentAudioDriver());
 
     // Init joypads
     int i;
@@ -151,13 +154,30 @@ int main ( int argc, char** argv )
     assert((vmode==VM_NTSC) || (vmode==VM_PAL));
     log4me_print("SMS : Use %s machine with %s video mode\n", machine==EXPORT ? "Export" : "Japan", vmode==VM_PAL ? "PAL" : "NTSC");
 
+    switch(getromgameconsole(rspecs)) {
+        case GC_SMS:
+            screen.width = 256;
+            screen.height = 192;
+            screen.margin = DEFAULT_MARGIN;
+            break;
+        case GC_GG:
+            screen.width = 160;
+            screen.height = 144;
+            screen.margin = 0;
+            break;
+        default:
+            assert(0);
+            break;
+    }
+    setvideomode(&screen);
+
     sms = ms_init(&screen, rspecs, nosound ? SND_OFF : SND_ON, joypads[0], joypads[1], environment->backup);
     if(sms==NULL) {
         log4me_error(LOG_EMU_MAIN, "Unable to allocate and initialize the SMS emulator.\n");
         exit(EXIT_FAILURE);
     }
 
-    SDL_SetWindowTitle(screen.window, sms->romname);
+    SDL_SetWindowTitle(screen.window, CSTR(sms->romname));
 
     done = pause = bookmark = 0;
 
@@ -177,10 +197,10 @@ int main ( int argc, char** argv )
             ms_pause(sms, pause);
         }
 
-        if(input_key_down(SDL_SCANCODE_S))
+        if(input_key_down(SDL_SCANCODE_F9))
             takesnapshot(sms, environment->snapshots);
 
-        if(input_key_down(SDL_SCANCODE_H))
+        if(input_key_down(SDL_SCANCODE_F10))
             takescreenshot(sms, environment->screenshots);
 
         if(input_key_down(SDL_SCANCODE_F2)) {
@@ -210,6 +230,9 @@ int main ( int argc, char** argv )
 
         if(input_key_down(SDL_SCANCODE_F5))
             savetiles(sms, environment->debug);
+
+        if(input_key_down(SDL_SCANCODE_F6))
+            tms9918a_toggledisplaypalette(&sms->vdp);
 #endif
 
         if(!ms_ispaused(sms)) ms_execute(sms);
@@ -341,7 +364,7 @@ static appenv *getappenv()
 #ifdef DEBUG
 void savetiles(mastersystem *sms, const string debugdir)
 {
-    string filename = gettimedfilename(sms->romname, "bmp");
+    string filename = gettimedfilename(CSTR(sms->romname), "bmp");
 
     string tilesfilename = strdups(debugdir);
     pathcombs(tilesfilename, filename);

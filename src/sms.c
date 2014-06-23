@@ -57,6 +57,8 @@
 
 #define JOYPAD2_DD_RESET   0x10
 
+#define GG_START_PAUSE     0x80
+
 // => SMS/GG hardware notes by Charles MacDonald
 // D7 : Expansion slot enable (1= disabled, 0= enabled)
 // D6 : Cartridge slot enable (1= disabled, 0= enabled)
@@ -68,8 +70,8 @@
 // D0 : Unknown
 #define iochip_disable(s)   (bit2_is_set(s->port_3e))
 
-typedef byte (*readiofunc)(void *obj);
-typedef void (*writeiofunc)(void *obj, byte data);
+typedef byte (*readiofunc)(void *obj, byte port);
+typedef void (*writeiofunc)(void *obj, byte port, byte data);
 
 struct _iomap {
     void *rdobj;
@@ -80,7 +82,8 @@ struct _iomap {
 
 static void sms_updatejoypads(mastersystem *sms);
 static string sms_getbackupfilename(mastersystem *sms);
-static void sms_loadrom(mastersystem *sms, const char *rom_path);
+static string sms_geteepromfilename(mastersystem *sms);
+static void sms_loadrom(mastersystem *sms);
 static void sms_loadsnapshot(mastersystem *sms, xmlDocPtr doc);
 
 static byte ms_readmemory(void* param, dword address)
@@ -101,18 +104,32 @@ static void ms_writemregister(mastersystem *sms, int reg, byte data)
 
     switch(reg) {
         case 0 :
-            if(bit3_is_set(data)) {
-                log4me_debug(LOG_EMU_SMS, "load page 2 = Cartridge RAM page %d\n", bit2_is_set(data) ? 1 : 0);
-                sms->rdmap[4] = sms->cartridgeram + (bit2_is_set(data) ? MS_PAGE_SIZE : 0); // 8ko
-                sms->rdmap[5] = sms->rdmap[4] + 8192; // 8ko
-                sms->wrmap[4] = sms->rdmap[4];
-                sms->wrmap[5] = sms->rdmap[5];
-                sms->cartridgeram_detected = 1;
-            } else {
-                log4me_debug(LOG_EMU_SMS, "disable on-board cartridge ram\n");
-                sms->wrmap[4] = sms->mnull;
-                sms->wrmap[5] = sms->mnull;
-                ms_writemregister(sms, 3, sms->mregisters[3]);
+            switch(getrommemorymapper(sms->rspecs)) {
+                case MM_SEGA:
+                    if(bit3_is_set(data)) {
+                        log4me_debug(LOG_EMU_SMS, "load page 2 = Cartridge RAM page %d\n", bit2_is_set(data) ? 1 : 0);
+                        sms->rdmap[4] = sms->cartridgeram + (bit2_is_set(data) ? MS_PAGE_SIZE : 0); // 8ko
+                        sms->rdmap[5] = sms->rdmap[4] + 8192; // 8ko
+                        sms->wrmap[4] = sms->rdmap[4];
+                        sms->wrmap[5] = sms->rdmap[5];
+                        sms->cartridgeram_detected = 1;
+                    } else {
+                        log4me_debug(LOG_EMU_SMS, "disable on-board cartridge ram\n");
+                        sms->wrmap[4] = sms->mnull;
+                        sms->wrmap[5] = sms->mnull;
+                        ms_writemregister(sms, 3, sms->mregisters[3]);
+                    }
+                    break;
+
+                case MM_SEGA_EEPROM:
+                    log4me_debug(LOG_EMU_SMS, "EEPROM %s\n", bit3_is_set(data) ? "enable" : "disable");
+                    if(bit7_is_set(data))
+                        seeprom_init(sms->mc93c46);
+                    break;
+
+                default:
+                    assert((getrommemorymapper(sms->rspecs)!=MM_SEGA) && (getrommemorymapper(sms->rspecs)!=MM_SEGA_EEPROM));
+                    break;
             }
             break;
 
@@ -146,6 +163,43 @@ static void ms_writemregister(mastersystem *sms, int reg, byte data)
 static void ms_writememory(void* param, dword address, byte data)
 {
     mastersystem *sms = (mastersystem*)param;
+
+    sms->wrmap[address>>13][address&0x1FFF] = data;
+    if(address>=0xFFFC)
+        ms_writemregister(sms, address & 0x03, data);
+
+#ifdef DEBUG
+    if((address<0x8000) || ((address<0xC000) && !bit3_is_set(sms->mregisters[0])))
+        log4me_warning(LOG_EMU_SMS, "write wrong address 0x%04X = 0x%02X\n", address, data);
+#endif
+}
+
+static byte ms_readmemory_segaeeprom(void* param, dword address)
+{
+    mastersystem *sms = (mastersystem*)param;
+
+    if(address<0x0400) return sms->rom[address];
+    if(address>=0xFFFC) return sms->mregisters[address&0x03];
+
+    if((address==0x8000) && bit3_is_set(sms->mregisters[0])) {
+        byte cs, dout, v;
+        seeprom_getlines(sms->mc93c46, &cs, NULL, &dout);
+        v = (cs << 2) | dout;
+        v |= 0x02; // ??
+        return v;
+    }
+
+    return sms->rdmap[address>>13][address&0x1FFF];
+}
+
+static void ms_writememory_segaeeprom(void* param, dword address, byte data)
+{
+    mastersystem *sms = (mastersystem*)param;
+
+    if((address==0x8000) && bit3_is_set(sms->mregisters[0])) {
+        seeprom_setlines(sms->mc93c46, bit2_is_set(data)/*cs*/, bit1_is_set(data)/*clk*/, bit0_is_set(data)/*din*/);
+        return;
+    }
 
     sms->wrmap[address>>13][address&0x1FFF] = data;
     if(address>=0xFFFC)
@@ -196,14 +250,26 @@ static byte ms_readio(void* param, byte port)
     iomap *iom = sms->iomapper + port;
 
     if(iom->readio!=NULL)
-        return iom->readio(iom->rdobj);
+        return iom->readio(iom->rdobj, port);
 
     log4me_warning(LOG_EMU_SMS, "read wrong port : 0x%02X (%d)\n", port, port);
     //exit(EXIT_FAILURE);
     return 0xFF;
 }
 
-static byte sms_readiojoypad1(mastersystem *sms)
+static byte sms_readioggstartpause(mastersystem *sms, byte port)
+{
+    sms_updatejoypads(sms);
+    return sms->ports[0];
+}
+
+static byte sms_readiogg(mastersystem *sms, byte port)
+{
+    log4me_debug(LOG_EMU_SMS, "read I/O port %d = %02X (%d)\n", port, sms->ports[port], sms->ports[port]);
+    return sms->ports[port];
+}
+
+static byte sms_readiojoypad1(mastersystem *sms, byte port)
 {
     /* => SMS/GG hardware notes by Charles MacDonald
     D7 : Port B DOWN pin input
@@ -219,7 +285,7 @@ static byte sms_readiojoypad1(mastersystem *sms)
     return sms->port_dc;
 }
 
-static byte sms_readiojoypad2(mastersystem *sms)
+static byte sms_readiojoypad2(mastersystem *sms, byte port)
 {
     /* => SMS/GG hardware notes by Charles MacDonald
     D7 : Port B TH pin input
@@ -238,7 +304,7 @@ static byte sms_readiojoypad2(mastersystem *sms)
     return sms->port_dd;
 }
 
-static byte sms_readioF2(mastersystem *sms)
+static byte sms_readioF2(mastersystem *sms, byte port)
 {
     // YM2413 available only on japan machine
     assert(iochip_disable(sms));
@@ -260,26 +326,26 @@ static void ms_writeio(void* param, byte port, byte data)
     iomap *iom = sms->iomapper + port;
 
     if(iom->writeio!=NULL) {
-        iom->writeio(iom->wrobj, data);
+        iom->writeio(iom->wrobj, port, data);
         return;
     }
 
-    log4me_warning(LOG_EMU_SMS, "write wrong port : 0x%02X (%d) - data : 0x%02X (%d) - (param=%d)\n", port, port, data, data);
+    log4me_warning(LOG_EMU_SMS, "write wrong port : 0x%02X (%d) - data : 0x%02X (%d)\n", port, port, data, data);
     //exit(EXIT_FAILURE);
 }
 
-static void sms_writeionull(mastersystem *sms, byte data)
+static void sms_writeionull(mastersystem *sms, byte port, byte data)
 {
 }
 
-static void sms_writeio3E(mastersystem *sms, byte data)
+static void sms_writeio3E(mastersystem *sms, byte port, byte data)
 {
     sms->port_3e = data;
     log4me_debug(LOG_EMU_SMS, "I/O chip=%d - BIOS ROM=%d - Work RAM=%d - Card slot=%d - Cartridge slot=%d Expansion slot=%d\n",
                    bit2_is_set(data), bit3_is_set(data), bit4_is_set(data), bit5_is_set(data), bit6_is_set(data), bit7_is_set(data));
 }
 
-static void sms_writeio3F(mastersystem *sms, byte data)
+static void sms_writeio3F(mastersystem *sms, byte port, byte data)
 {
     sms->port_3f = data;
     assert((bit0_is_set(sms->port_3f) ^ bit2_is_set(sms->port_3f))==0);
@@ -307,7 +373,13 @@ static void sms_writeio3F(mastersystem *sms, byte data)
     log4me_debug(LOG_EMU_SMS, "write port 0x3F = 0x%02X (%d)\n", data, data);
 }
 
-static void sms_writeioF2(mastersystem *sms, byte data)
+static void sms_writeiogg(mastersystem *sms, byte port, byte data)
+{
+    log4me_debug(LOG_EMU_SMS, "write port %d = 0x%02X (%d)\n", port, data, data);
+    sms->ports[port] = data;
+}
+
+static void sms_writeioF2(mastersystem *sms, byte port, byte data)
 {
     sms->port_f2 = data;
     log4me_debug(LOG_EMU_SMS, "Write %02X (%d) to port F2 => Try to detect YM2413\n", data, data);
@@ -322,14 +394,24 @@ static void sms_initiomapper(mastersystem *sms)
     sms->iomapper[p].writeio = (writeiofunc)w; \
 }
 
+if(sms->gconsole==GC_GG) {
+    INIT_IO_MAP(0x00, sms           , sms_readioggstartpause, NULL          , NULL);
+    INIT_IO_MAP(0x01, sms           , sms_readiogg          , sms           , sms_writeiogg);
+    INIT_IO_MAP(0x02, sms           , sms_readiogg          , sms           , sms_writeiogg);
+    INIT_IO_MAP(0x03, sms           , sms_readiogg          , sms           , sms_writeiogg)
+    INIT_IO_MAP(0x04, sms           , sms_readiogg          , NULL          , NULL);
+    INIT_IO_MAP(0x05, sms           , sms_readiogg          , sms           , sms_writeiogg);
+    INIT_IO_MAP(0x06, NULL          , NULL                  , &sms->snd     , sn76489_writestereo);
+}
+
     INIT_IO_MAP(0x3E, NULL          , NULL                  , sms           , sms_writeio3E);
     INIT_IO_MAP(0x3F, NULL          , NULL                  , sms           , sms_writeio3F);
 
     INIT_IO_MAP(0x7E, &sms->vdp     , tms9918a_getscanline  , &sms->snd     , sn76489_write);
     INIT_IO_MAP(0x7F, &sms->vdp     , tms9918a_getscanline  , &sms->snd     , sn76489_write); // Read H Counter not implemented
 
-    INIT_IO_MAP(0xBE, &sms->vdp     , tms9918a_readdata     , &sms->vdp     , tms9918a_writedata);
     INIT_IO_MAP(0xBD, NULL          , NULL                  , &sms->vdp     , tms9918a_writeop);
+    INIT_IO_MAP(0xBE, &sms->vdp     , tms9918a_readdata     , &sms->vdp     , tms9918a_writedata);
     INIT_IO_MAP(0xBF, &sms->vdp     , tms9918a_readstatus   , &sms->vdp     , tms9918a_writeop);
 
     INIT_IO_MAP(0xC0, sms           , sms_readiojoypad1     , NULL          , NULL);
@@ -354,7 +436,7 @@ void ms_free(mastersystem *sms)
         bkpfilename = sms_getbackupfilename(sms);
 
         if((f = fopen(CSTR(bkpfilename), "wb"))==NULL) {
-            log4me_error(LOG_EMU_SMS, "Backup cartridge ram failed !\n");
+            log4me_error(LOG_EMU_SMS, "Save cartridge RAM failed !\n");
             return;
         }
         fwrite(sms->cartridgeram, sizeof(byte), MS_CARTRIDGE_RAM, f);
@@ -362,12 +444,19 @@ void ms_free(mastersystem *sms)
         strfree(bkpfilename);
     }
 
+    if(sms->mc93c46) {
+        bkpfilename = sms_geteepromfilename(sms);
+        seeprom_savedata(sms->mc93c46, bkpfilename);
+        strfree(bkpfilename);
+    }
+
+    seeprom_free(sms->mc93c46);
     ym2413_free(&sms->fmsnd);
     sn76489_free(&sms->snd);
     tms9918a_free(&sms->vdp);
     clock_release(sms->idclock1s);
+    strfree(sms->romname);
     if(sms->iomapper) free(sms->iomapper);
-    if(sms->romname) free(sms->romname);
     if(sms->rom) free(sms->rom);
     if(sms->lkptsps) free(sms->lkptsps);
     if(sms->z80) cpuZ80_free(sms->z80);
@@ -377,7 +466,9 @@ void ms_free(mastersystem *sms)
 mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, int joypad1, int joypad2, string backupdir)
 {
     int i;
-    segalicense slrom = getromlicense(rspecs);
+    assert((getromgameconsole(rspecs)==GC_SMS) || (getromgameconsole(rspecs)==GC_GG));
+
+    memorymapper mmrom = getrommemorymapper(rspecs);
     mastersystem *sms = calloc(1, sizeof(mastersystem));
     if(sms==NULL) {
         log4me_error(LOG_EMU_SMS, "Unable to allocate the memory block.\n");
@@ -385,16 +476,27 @@ mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff
     }
     pushobject(sms, ms_free);
 
-    assert((slrom==SL_SEGA) || (slrom==SL_CODEMASTERS));
+    switch(mmrom) {
+        case MM_SEGA:
+            sms->z80 = cpuZ80_create(sms, ms_readmemory, ms_writememory, ms_readio, ms_writeio);
+            break;
+        case MM_SEGA_EEPROM:
+            sms->z80 = cpuZ80_create(sms, ms_readmemory_segaeeprom, ms_writememory_segaeeprom, ms_readio, ms_writeio);
+            sms->mc93c46 = seeprom_create();
+            break;
+        case MM_CODEMASTERS:
+             sms->z80 = cpuZ80_create(sms, sms_readmemorycodemasters, sms_writememorycodemasters, ms_readio, ms_writeio);
+            break;
+    }
 
-    sms->z80 = cpuZ80_create(sms, slrom==SL_CODEMASTERS ? sms_readmemorycodemasters : ms_readmemory,
-                    slrom==SL_CODEMASTERS ? sms_writememorycodemasters : ms_writememory, ms_readio, ms_writeio);
     if(sms->z80==NULL) {
         log4me_error(LOG_EMU_SMS, "Unable to allocate and initialize the Z80 cpu emulator.\n");
         exit(EXIT_FAILURE);
     }
 
     sms->rspecs = rspecs;
+    sms->gconsole = getromgameconsole(rspecs);
+
     sms->clock = getromvideomode(sms->rspecs)==VM_NTSC ? CPU_CLOCK_NTSC : CPU_CLOCK_PAL;
     sms->cpu = 0;
 
@@ -427,23 +529,35 @@ mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff
     //memset(sms->cartridgeram, 0, MS_CARTRIDGE_RAM);
     sms->cartridgeram_detected = 0;
 
+    // Game Gear only
+    sms->ports[0] = (getrommachine(sms->rspecs)!=JAPAN ? 0x40 : 0) | 0x80;
+    sms->ports[1] = 0x7F;
+    sms->ports[2] = 0xFF;
+    sms->ports[3] = 0x00;
+    sms->ports[4] = 0xFF;
+    sms->ports[5] = 0x00;
+    assert(MS_GG_NUM_PORTS==6);
+
     sms->port_3f = 0;
     sms->port_dc = JOYPAD1_DC_INIT;
     sms->port_dd = JOYPAD2_DD_INIT;
     sms->port_3e = 0xE0; // => Software Reference Manual for the SEGA Mark III Console (page 44)
     sms->port_f2 = 0;
 
-    sms_writeio3E(sms, sms->port_3e); // force init iochip_disable, etc...
+    sms_writeio3E(sms, 0x3E, sms->port_3e); // force init iochip_disable, etc...
 
     sms->joystick1 = joypad1;
     sms->joystick2 = joypad2;
 
     sms->pause = 0;
 
-    tms9918a_init(&sms->vdp, screen, getromvideomode(rspecs));
+    tms9918a_init(&sms->vdp, sms->gconsole, screen, getromvideomode(rspecs));
     sms->scanlinespersecond = sms->vdp.framerate * sms->vdp.internalscanlines;
+    sms->curscanlineps = 0;
 
-    sn76489_init(&sms->snd, sms->clock, sms->scanlinespersecond, playsound);
+    sms->tstates = 0;
+
+    sn76489_init(&sms->snd, sms->clock, sms->scanlinespersecond, sms->gconsole==GC_GG ? SC_STEREO : SC_MONO, playsound);
     ym2413_init(&sms->fmsnd);
 
     sms->backupdir = backupdir;
@@ -461,7 +575,7 @@ mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff
     for(i=0;i<sms->scanlinespersecond;i++)
         sms->lkptsps[i] = (((uint64_t)sms->clock*(i+1)) / sms->scanlinespersecond) - (((uint64_t)sms->clock*i) / sms->scanlinespersecond);
 
-    sms_loadrom(sms, CSTR(getromfilename(rspecs)));
+    sms_loadrom(sms);
 
     if(romhavesnapshot(rspecs))
         sms_loadsnapshot(sms, getromsnapshot(rspecs));
@@ -469,58 +583,34 @@ mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff
     return sms;
 }
 
-static void sms_loadrom(mastersystem *sms, const char *rom_path)
+static void sms_loadrom(mastersystem *sms)
 {
-    FILE *f;
-    char *rname, *romext;
     string bkpfilename;
-    long header;
-
-    if((f = fopen(rom_path, "rb"))==NULL) {
-        log4me_error(LOG_EMU_SMS, "File not found : %s\n", rom_path);
-        exit(EXIT_FAILURE);
-    }
+    FILE *fbkp;
 
     log4me_print("************ Loading ROM ************\n");
 
-    rname = (rname = strrchr(rom_path, CHR_PATH_SEPARATOR))==NULL ? (char*)rom_path : rname+1;
-    sms->romname = malloc(strlen(rname)+1);
-    strcpy(sms->romname, rname);
-    if((romext = strrchr(sms->romname, '.'))!=NULL) *romext = '\0';
-    log4me_print("%s\n", sms->romname);
-    log4me_print("Digest   : %s\n", CSTR(getromdigest(sms->rspecs)));
+    sms->romname = getromname(sms->rspecs);
+    log4me_print("%s\n", CSTR(sms->romname));
+    log4me_print("Digest    : %s\n", CSTR(getromdigest(sms->rspecs)));
+    log4me_print("Plateform : %s\n", sms->gconsole==GC_SMS ? "Sega Master Sytem" : "Sega Game Gear");
 
-    fseek(f, 0, SEEK_END);
-    sms->romlen = ftell(f);
-
-    header = sms->romlen % MS_PAGE_SIZE;
-    if(header!=0) {
-        log4me_print("Header found, skip it ...\n");
-        sms->romlen -= header;
-        fseek(f, header, SEEK_SET);
-    } else
-        fseek(f, 0, SEEK_SET);
-
-    if((sms->romlen % MS_PAGE_SIZE)!=0) {
-        log4me_error(LOG_EMU_SMS, "Incorrect ROM file length ...\n");
-        exit(EXIT_FAILURE);
-    }
-
-    log4me_print("Length   : %d ko\n", sms->romlen/1024);
+    sms->romlen = getromlength(sms->rspecs);
+    log4me_print("Length    : %d ko\n", sms->romlen/1024);
 
     sms->rombanks = (sms->romlen / MS_PAGE_SIZE);
-    log4me_print("Banks    : %d\n", sms->rombanks);
+    log4me_print("Banks     : %d\n", sms->rombanks);
 
     sms->rom = malloc(sms->romlen);
-    if(fread(sms->rom, sizeof(byte), sms->romlen, f)!=sms->romlen)
+    if(readromdata(sms->rspecs, 0, sms->rom, sms->romlen)!=sms->romlen)
         goto error;
-    fclose(f);
 
-    log4me_print("Tag      : %s\n", memcmp(sms->rom + 0x7FF0, SEGA_MS_TAG, strlen(SEGA_MS_TAG))!=0 ? "Not found" : SEGA_MS_TAG);
+    //log4me_print("Tag       : %s\n", memcmp(sms->rom + 0x7FF0, SEGA_MS_TAG, strlen(SEGA_MS_TAG))!=0 ? "Not found" : SEGA_MS_TAG);
 
     int i;
-    switch(getromlicense(sms->rspecs)) {
-        case SL_SEGA:
+    switch(getrommemorymapper(sms->rspecs)) {
+        case MM_SEGA:
+        case MM_SEGA_EEPROM:
             ms_writememory(sms, 0xFFFC, 0);
             ms_writememory(sms, 0xFFFD, 0);
             ms_writememory(sms, 0xFFFE, 1);
@@ -528,7 +618,7 @@ static void sms_loadrom(mastersystem *sms, const char *rom_path)
             ms_writememory(sms, 0xFFFF, 2);
             break;
 
-        case SL_CODEMASTERS:
+        case MM_CODEMASTERS:
             for(i=0;i<6;i++) sms->rdmap[i] = sms->rom + 8192 * i;
             sms->cmregister = 2;
             break;
@@ -538,11 +628,21 @@ static void sms_loadrom(mastersystem *sms, const char *rom_path)
 
     // Load backup cartridge RAM
     bkpfilename = sms_getbackupfilename(sms);
-    if((f = fopen(CSTR(bkpfilename), "rb"))!=NULL) {
-        if(fread(sms->cartridgeram, sizeof(byte), MS_CARTRIDGE_RAM, f)!=MS_CARTRIDGE_RAM)
+    if((fbkp = fopen(CSTR(bkpfilename), "rb"))!=NULL) {
+        sms->cartridgeram_detected = fread(sms->cartridgeram, sizeof(byte), MS_CARTRIDGE_RAM, fbkp) == MS_CARTRIDGE_RAM;
+        if(sms->cartridgeram_detected)
+            log4me_print("RAM       : loaded\n");
+        else
             memset(sms->cartridgeram, 0, MS_CARTRIDGE_RAM);
-        fclose(f) ;
-        log4me_print("RAM        : loaded\n");
+        fclose(fbkp) ;
+    }
+    strfree(bkpfilename);
+
+    // Load EEPROM data
+    bkpfilename = sms_geteepromfilename(sms);
+    if(sms->mc93c46 && fileexists(bkpfilename)) {
+        seeprom_loaddata(sms->mc93c46, bkpfilename);
+        log4me_print("EEPROM    : loaded\n");
     }
     strfree(bkpfilename);
 
@@ -550,8 +650,6 @@ static void sms_loadrom(mastersystem *sms, const char *rom_path)
     return;
 
 error:
-    if(f!=NULL)
-        fclose(f);
     log4me_error(LOG_EMU_SMS, "Read ROM failed.\n");
     exit(EXIT_FAILURE);
 }
@@ -567,22 +665,31 @@ void ms_start(mastersystem *sms)
     clock_step(sms->idclock1s);
 }
 
+static inline int sms_cpustep(mastersystem *sms)
+{
+#ifdef DEBUG
+    char dasm[80];
+
+    if(log4me_enabled(LOG_EMU_Z80_MASK) && !sms->z80->halted) {
+        cpuZ80_dasm_pc(sms->z80, dasm, 80);
+        log4me_debug(LOG_EMU_Z80, "0x%04X : %s\n", cpuZ80_getPC(sms->z80), dasm);
+    }
+#endif
+    return cpuZ80_step(sms->z80);
+}
+
 void ms_execute(mastersystem *sms)
 {
 #define interrupt() { \
-    if(cpuZ80_int_accepted(sms->z80) && tms9918a_int_pending(&sms->vdp)) { \
-        tstates_op = cpuZ80_int(sms->z80); \
-        tstates += tstates_op; \
+    if(tms9918a_int_pending(&sms->vdp)) { \
+        tstates_op = sms_cpustep(sms); \
+        if(cpuZ80_int_accepted(sms->z80)) tstates_op += cpuZ80_int(sms->z80); \
+        sms->tstates += tstates_op; \
         sms->cpu += tstates_op; \
     } \
 }
     int monitor_scanlines;
     int tstates_per_scanline, tstates_op;
-    static int tstates = 0;
-    static int scanline = 0;
-#ifdef DEBUG
-    char dasm[80];
-#endif
 
     assert(sms->vdp.scanline==0);
     assert(sms->pause==0);
@@ -593,24 +700,18 @@ void ms_execute(mastersystem *sms)
     tms9918a_waitnextframe(&sms->vdp);
 
     while(monitor_scanlines>0) {
-        tstates_per_scanline = sms->lkptsps[scanline];
-        if(++scanline>=sms->scanlinespersecond) scanline = 0;
+        tstates_per_scanline = sms->lkptsps[sms->curscanlineps];
 
         do {
             interrupt();
-#ifdef DEBUG
-            if(log4me_enabled(LOG_EMU_Z80_MASK) && !sms->z80->halted) {
-                cpuZ80_dasm_pc(sms->z80, dasm, 80);
-                log4me_debug(LOG_EMU_Z80, "0x%04X : %s\n", cpuZ80_getPC(sms->z80), dasm);
-            }
-#endif
-            tstates_op = cpuZ80_step(sms->z80);
-            tstates += tstates_op;
-            sms->cpu += tstates_op;
-        } while(tstates<tstates_per_scanline);
-        tstates -= tstates_per_scanline;
 
-        if(input_key_down(SDL_SCANCODE_P))
+            tstates_op = sms_cpustep(sms);
+            sms->tstates += tstates_op;
+            sms->cpu += tstates_op;
+        } while(sms->tstates<tstates_per_scanline);
+        sms->tstates -= tstates_per_scanline;
+
+        if((sms->gconsole==GC_SMS) && input_key_down(SDL_SCANCODE_S))
             cpuZ80_nmi(sms->z80);
 
         sn76489_execute(&sms->snd);
@@ -619,6 +720,7 @@ void ms_execute(mastersystem *sms)
 
         interrupt();
 
+        if(++sms->curscanlineps>=sms->scanlinespersecond) sms->curscanlineps = 0;
         monitor_scanlines--;
 
         if(clock_elapsed(sms->idclock1s)) {
@@ -720,10 +822,16 @@ static void sms_updatejoypads(mastersystem *sms)
         BUT_PAD(sms->joystick2, 1, sms->port_dd, JOYPAD2_DD_TR);
     }
 
+    if(sms->gconsole==GC_GG) {
+        KEY_PAD(SDL_SCANCODE_S, sms->ports[0], GG_START_PAUSE);
+    }
+
     // Others
-    if( input_key_down(SDL_SCANCODE_R))
-        log4me_print("Software reset\n");
-    KEY_PAD(SDL_SCANCODE_R, sms->port_dd, JOYPAD2_DD_RESET);
+    if(sms->gconsole==GC_SMS) {
+        if( input_key_down(SDL_SCANCODE_R))
+            log4me_print("Software reset\n");
+        KEY_PAD(SDL_SCANCODE_R, sms->port_dd, JOYPAD2_DD_RESET);
+    }
 }
 
 static string sms_getbackupfilename(mastersystem *sms)
@@ -731,8 +839,18 @@ static string sms_getbackupfilename(mastersystem *sms)
     string bkpfilename = strdups(sms->backupdir);
 
     straddc(bkpfilename, "/");
-    straddc(bkpfilename, sms->romname);
+    stradds(bkpfilename, sms->romname);
     straddc(bkpfilename, ".bkp");
+    return bkpfilename;
+}
+
+static string sms_geteepromfilename(mastersystem *sms)
+{
+    string bkpfilename = strdups(sms->backupdir);
+
+    straddc(bkpfilename, "/");
+    stradds(bkpfilename, sms->romname);
+    straddc(bkpfilename, ".eeprom");
     return bkpfilename;
 }
 
@@ -745,7 +863,7 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
     xmlTextWriterWriteAttribute(writer, BAD_CAST "version", BAD_CAST VERSION);
 
         xmlTextWriterStartElement(writer, BAD_CAST "rom");
-        xmlTextWriterWriteFormatString(writer, "%s", sms->romname);
+        xmlTextWriterWriteFormatString(writer, "%s", CSTR(sms->romname));
         xmlTextWriterEndElement(writer); /* rom */
 
         xmlTextWriterStartElement(writer, BAD_CAST "romfilename");
@@ -764,8 +882,9 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
         xmlTextWriterWriteFormatString(writer, "%s", getromvideomode(sms->rspecs)==VM_NTSC ? "ntsc" : "pal");
         xmlTextWriterEndElement(writer); /* videmode */
 
-        switch(getromlicense(sms->rspecs)) {
-            case SL_SEGA:
+        switch(getrommemorymapper(sms->rspecs)) {
+            case MM_SEGA:
+            case MM_SEGA_EEPROM:
                 xmlTextWriterStartElement(writer, BAD_CAST "memregisters");
                     for(i=0;i<MS_REGISTERS;i++) {
                         xmlTextWriterStartElement(writer, BAD_CAST "register");
@@ -775,7 +894,7 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
                 }
                 xmlTextWriterEndElement(writer); /* memregisters */
                 break;
-            case SL_CODEMASTERS:
+            case MM_CODEMASTERS:
                 xmlTextWriterStartElement(writer, BAD_CAST "cmregister");
                 xmlTextWriterWriteFormatString(writer, "%02X", sms->cmregister);
                 xmlTextWriterEndElement(writer); /* cmregister */
@@ -783,6 +902,15 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
         }
 
         xmlTextWriterStartElement(writer, BAD_CAST "ports");
+            if(sms->gconsole==GC_GG) {
+                for(i=0;i<MS_GG_NUM_PORTS;i++) {
+                    xmlTextWriterStartElement(writer, BAD_CAST "port");
+                    xmlTextWriterWriteFormatAttribute(writer, BAD_CAST "id", "%02X", i);
+                    xmlTextWriterWriteFormatString(writer, "%02X", sms->ports[i]);
+                    xmlTextWriterEndElement(writer); /* port */
+                }
+            }
+
             xmlTextWriterStartElement(writer, BAD_CAST "port");
             xmlTextWriterWriteAttribute(writer, BAD_CAST "id", BAD_CAST "3E");
             xmlTextWriterWriteFormatString(writer, "%02X", sms->port_3e);
@@ -813,6 +941,9 @@ void sms_takesnapshot(mastersystem *sms, xmlTextWriterPtr writer)
 
         if(sms->cartridgeram_detected)
             xmlTextWriterWriteArray(writer, "cartridgeram", sms->cartridgeram, MS_CARTRIDGE_RAM);
+
+        if(sms->mc93c46)
+            seeprom_takesnapshot(sms->mc93c46, writer);
 
         xmlTextWriterStartElement(writer, BAD_CAST "cpu");
             cpuZ80_takesnapshot(sms->z80, writer);
@@ -849,6 +980,24 @@ static void sms_loadsnapshot(mastersystem *sms, xmlDocPtr doc)
         XML_ELEMENT_ENUM_CHILD("ports", node, child,
             XML_ELEMENT_CONTENT("port", child,
                 xmlChar *port = xmlGetProp(child, BAD_CAST "id");
+                if(xmlStrCaseCmp(port, "00"))
+                    sms->ports[0] = (byte)strtoul((const char *)content, NULL, 16);
+                else
+                if(xmlStrCaseCmp(port, "01"))
+                    sms->ports[1] = (byte)strtoul((const char *)content, NULL, 16);
+                else
+                if(xmlStrCaseCmp(port, "02"))
+                    sms->ports[2] = (byte)strtoul((const char *)content, NULL, 16);
+                else
+                if(xmlStrCaseCmp(port, "03"))
+                    sms->ports[3] = (byte)strtoul((const char *)content, NULL, 16);
+                else
+                if(xmlStrCaseCmp(port, "04"))
+                    sms->ports[4] = (byte)strtoul((const char *)content, NULL, 16);
+                else
+                if(xmlStrCaseCmp(port, "05"))
+                    sms->ports[5] = (byte)strtoul((const char *)content, NULL, 16);
+                else
                 if(xmlStrCaseCmp(port, "3E"))
                     sms->port_3e = (byte)strtoul((const char *)content, NULL, 16);
                 else
@@ -872,6 +1021,12 @@ static void sms_loadsnapshot(mastersystem *sms, xmlDocPtr doc)
 
         XML_ELEMENT("cartridgeram", node,
             xmlNodeReadArray(node, sms->cartridgeram, MS_CARTRIDGE_RAM);
+            sms->cartridgeram_detected = 1;
+        )
+
+        XML_ELEMENT("eeprom", node,
+            if(sms->mc93c46)
+                seeprom_loadsnapshot(sms->mc93c46, node);
         )
 
         XML_ELEMENT_ENUM_CHILD("cpu", node, cpu,

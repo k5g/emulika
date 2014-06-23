@@ -94,8 +94,9 @@ am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am_emulika_OBJECTS = main.$(OBJEXT) clock.$(OBJEXT) environ.$(OBJEXT) \
 	sms.$(OBJEXT) tms9918a.$(OBJEXT) ym2413.$(OBJEXT) \
-	input.$(OBJEXT) sn76489.$(OBJEXT) screenshot.$(OBJEXT) \
-	rom.$(OBJEXT) snapshot.$(OBJEXT) video.$(OBJEXT)
+	icon.$(OBJEXT) input.$(OBJEXT) sn76489.$(OBJEXT) \
+	screenshot.$(OBJEXT) rom.$(OBJEXT) snapshot.$(OBJEXT) \
+	video.$(OBJEXT) seeprom.$(OBJEXT)
 emulika_OBJECTS = $(am_emulika_OBJECTS)
 emulika_DEPENDENCIES = misc/libmisc.a cpu/libcpu.a
 AM_V_P = $(am__v_P_@AM_V@)
@@ -300,13 +301,15 @@ emulika_SOURCES = main.c \
 	sms.c sms.h \
 	tms9918a.c tms9918a.h \
 	ym2413.c ym2413.h \
+	icon.c icon.h \
 	input.c input.h \
 	sn76489.c sn76489.h \
 	screenshot.c screenshot.h \
 	emul.h \
 	rom.c rom.h \
 	snapshot.c snapshot.h \
-	video.c video.h
+	video.c video.h \
+	seeprom.c seeprom.h
 
 emulika_LDADD = misc/libmisc.a cpu/libcpu.a
 all: all-recursive
@@ -398,10 +401,12 @@ distclean-compile:
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/clock.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/environ.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/icon.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/input.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/main.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/rom.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/screenshot.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/seeprom.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sms.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sn76489.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/snapshot.Po@am__quote@

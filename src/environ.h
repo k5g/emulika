@@ -20,4 +20,6 @@ string gettimedfilename(const char *filename, const char *ext);
 string gethomedir(void);
 void createdirectory(const string dir);
 
+int fileexists(const string filename);
+
 #endif // ENVIRON_H_INCLUDED

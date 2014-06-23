@@ -138,10 +138,34 @@ static void add_iy_sp(cpuZ80 *cpu) /* 0xFD 0x39 */
     cpu->IY = add16(cpu, cpu->IY, cpu->SP);
 }
 
+static void ld_b_iyh(cpuZ80 *cpu) /* 0xFD 0x44 */
+{
+    cpu->cycles += 8;
+    cpu->b.B = ((cpu->IY & 0xFF00) >> 8);
+}
+
+static void ld_b_iyl(cpuZ80 *cpu) /* 0xFD 0x45 */
+{
+    cpu->cycles += 8;
+    cpu->b.B = cpu->IY & 0x00FF;
+}
+
 static void ld_b_miyd(cpuZ80 *cpu) /* 0xFD 0x46 */
 {
     cpu->cycles += 19;
     cpu->b.B = read8(cpu, cpu->IY+sread8(cpu, cpu->PC++));
+}
+
+static void ld_c_iyh(cpuZ80 *cpu) /* 0xFD 0x4C */
+{
+    cpu->cycles += 8;
+    cpu->b.C = ((cpu->IY & 0xFF00) >> 8);
+}
+
+static void ld_c_iyl(cpuZ80 *cpu) /* 0xFD 0x4D */
+{
+    cpu->cycles += 8;
+    cpu->b.C = cpu->IY & 0x00FF;
 }
 
 static void ld_c_miyd(cpuZ80 *cpu) /* 0xFD 0x4E */
@@ -210,6 +234,18 @@ static void ld_iyh_e(cpuZ80 *cpu) /* 0xFD 0x63 */
     cpu->IY = (cpu->IY & 0x00FF) | ((word)cpu->b.E << 8);
 }
 
+static void ld_iyh_iyh(cpuZ80 *cpu) /* 0xFD 0x64 */
+{
+    cpu->cycles += 8;
+}
+
+static void ld_iyh_iyl(cpuZ80 *cpu) /* 0xFD 0x65 */
+{
+    cpu->cycles += 8;
+    byte ixl = cpu->IY & 0x00FF;
+    cpu->IY = (cpu->IY << 8) | ixl;
+}
+
 static void ld_h_miyd(cpuZ80 *cpu) /* 0xFD 0x66 */
 {
     cpu->cycles += 19;
@@ -244,6 +280,18 @@ static void ld_iyl_e(cpuZ80 *cpu) /* 0xFD 0x6B */
 {
     cpu->cycles += 8;
     cpu->IY = (cpu->IY & 0xFF00) | cpu->b.E;
+}
+
+static void ld_iyl_iyh(cpuZ80 *cpu) /* 0xFD 0x6C */
+{
+    cpu->cycles += 8;
+    byte ixh = cpu->IY >> 8;
+    cpu->IY = (cpu->IY & 0xFF00) | ixh;
+}
+
+static void ld_iyl_iyl(cpuZ80 *cpu) /* 0xFD 0x6D */
+{
+    cpu->cycles += 8;
 }
 
 static void ld_l_miyd(cpuZ80 *cpu) /* 0xFD 0x6E */
@@ -318,10 +366,34 @@ static void ld_a_miyd(cpuZ80 *cpu) /* 0xFD 0x7E */
     cpu->b.A = read8(cpu, cpu->IY+sread8(cpu, cpu->PC++));
 }
 
+static void add_a_iyh(cpuZ80 *cpu) /* 0xFD 0x84 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = add8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void add_a_iyl(cpuZ80 *cpu) /* 0xFD 0x85 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = add8(cpu, cpu->b.A, cpu->IY & 0x00FF);
+}
+
 static void add_a_miyd(cpuZ80 *cpu) /* 0xFD 0x86 */
 {
     cpu->cycles += 19;
     cpu->b.A = add8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
+}
+
+static void adc_a_iyh(cpuZ80 *cpu) /* 0xFD 0x8C */
+{
+    cpu->cycles += 8;
+    cpu->b.A = adc8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void adc_a_iyl(cpuZ80 *cpu) /* 0xFD 0x8D */
+{
+    cpu->cycles += 8;
+    cpu->b.A = adc8(cpu, cpu->b.A, cpu->IY & 0x00FF);
 }
 
 static void adc_a_miyd(cpuZ80 *cpu) /* 0xFD 0x8E */
@@ -330,10 +402,34 @@ static void adc_a_miyd(cpuZ80 *cpu) /* 0xFD 0x8E */
     cpu->b.A = adc8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
 }
 
+static void sub_iyh(cpuZ80 *cpu) /* 0xFD 0x94 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = sub8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void sub_iyl(cpuZ80 *cpu) /* 0xFD 0x95 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = sub8(cpu, cpu->b.A, cpu->IY & 0x00FF);
+}
+
 static void sub_miyd(cpuZ80 *cpu) /* 0xFD 0x96 */
 {
     cpu->cycles += 19;
     cpu->b.A = sub8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
+}
+
+static void sbc_a_iyh(cpuZ80 *cpu) /* 0xFD 0x9C */
+{
+    cpu->cycles += 8;
+    cpu->b.A = sbc8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void sbc_a_iyl(cpuZ80 *cpu) /* 0xFD 0x9D */
+{
+    cpu->cycles += 8;
+    cpu->b.A = sbc8(cpu, cpu->b.A, cpu->IY & 0x00FF);
 }
 
 static void sbc_a_miyd(cpuZ80 *cpu) /* 0xFD 0x9E */
@@ -342,10 +438,34 @@ static void sbc_a_miyd(cpuZ80 *cpu) /* 0xFD 0x9E */
     cpu->b.A = sbc8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
 }
 
+static void and_iyh(cpuZ80 *cpu) /* 0xFD 0xA4 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = and8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void and_iyl(cpuZ80 *cpu) /* 0xFD 0xA5 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = and8(cpu, cpu->b.A, cpu->IY & 0x00FF);
+}
+
 static void and_miyd(cpuZ80 *cpu) /* 0xFD 0xA6 */
 {
     cpu->cycles += 19;
     cpu->b.A = and8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
+}
+
+static void xor_iyh(cpuZ80 *cpu) /* 0xFD 0xAC */
+{
+    cpu->cycles += 8;
+    cpu->b.A = xor8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void xor_iyl(cpuZ80 *cpu) /* 0xFD 0xAD */
+{
+    cpu->cycles += 8;
+    cpu->b.A = xor8(cpu, cpu->b.A, cpu->IY & 0x00FF);
 }
 
 static void xor_miyd(cpuZ80 *cpu) /* 0xFD 0xAE */
@@ -354,13 +474,37 @@ static void xor_miyd(cpuZ80 *cpu) /* 0xFD 0xAE */
     cpu->b.A = xor8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
 }
 
+static void or_iyh(cpuZ80 *cpu) /* 0xFD 0xB4 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = or8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void or_iyl(cpuZ80 *cpu) /* 0xFD 0xB5 */
+{
+    cpu->cycles += 8;
+    cpu->b.A = or8(cpu, cpu->b.A, cpu->IY & 0x00FF);
+}
+
 static void or_miyd(cpuZ80 *cpu) /* 0xFD 0xB6 */
 {
     cpu->cycles += 19;
     cpu->b.A = or8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
 }
 
-static void cp_miyd(cpuZ80 *cpu) /* 0xFD 0xB6 */
+static void cp_iyh(cpuZ80 *cpu) /* 0xFD 0xBC */
+{
+    cpu->cycles += 8;
+    sub8(cpu, cpu->b.A, cpu->IY >> 8);
+}
+
+static void cp_iyl(cpuZ80 *cpu) /* 0xFD 0xBD */
+{
+    cpu->cycles += 8;
+    sub8(cpu, cpu->b.A, cpu->IY & 0x00FF);
+}
+
+static void cp_miyd(cpuZ80 *cpu) /* 0xFD 0xBE */
 {
     cpu->cycles += 19;
     sub8(cpu, cpu->b.A, read8(cpu, cpu->IY+sread8(cpu, cpu->PC++)));
@@ -390,6 +534,12 @@ static void jp_iy(cpuZ80 *cpu) /* 0xFD 0xE9 */
 {
     cpu->cycles += 8;
     cpu->PC = cpu->IY;
+}
+
+static void ld_sp_iy(cpuZ80 *cpu) /* 0xFD 0xF9 */
+{
+    cpu->cycles += 10;
+    cpu->SP = cpu->IY;
 }
 
 opcode opcodes_fd[256] = {
@@ -461,16 +611,16 @@ opcode opcodes_fd[256] = {
     { NULL,         DASM("")            /* 0xFD 0x41 */ },
     { NULL,         DASM("")            /* 0xFD 0x42 */ },
     { NULL,         DASM("")            /* 0xFD 0x43 */ },
-    { NULL,         DASM("")            /* 0xFD 0x44 */ },
-    { NULL,         DASM("")            /* 0xFD 0x45 */ },
+    { ld_b_iyh,     DASM("LD B,IYh")    /* 0xFD 0x44 */ },
+    { ld_b_iyl,     DASM("LD B,IYl")    /* 0xFD 0x45 */ },
     { ld_b_miyd,    DASM("LD B,(IY+#d)")/* 0xFD 0x46 */ },
     { NULL,         DASM("")            /* 0xFD 0x47 */ },
     { NULL,         DASM("")            /* 0xFD 0x48 */ },
     { NULL,         DASM("")            /* 0xFD 0x49 */ },
     { NULL,         DASM("")            /* 0xFD 0x4A */ },
     { NULL,         DASM("")            /* 0xFD 0x4B */ },
-    { NULL,         DASM("")            /* 0xFD 0x4C */ },
-    { NULL,         DASM("")            /* 0xFD 0x4D */ },
+    { ld_c_iyh,     DASM("LD C,IYh")    /* 0xFD 0x4C */ },
+    { ld_c_iyl,     DASM("LD C,IYl")    /* 0xFD 0x4D */ },
     { ld_c_miyd,    DASM("LD C,(IY+#d)")/* 0xFD 0x4E */ },
     { NULL,         DASM("")            /* 0xFD 0x4F */ },
     { NULL,         DASM("")            /* 0xFD 0x50 */ },
@@ -493,16 +643,16 @@ opcode opcodes_fd[256] = {
     { ld_iyh_c,     DASM("LD IYh,C")    /* 0xFD 0x61 */ },
     { ld_iyh_d,     DASM("LD IYh,D")    /* 0xFD 0x62 */ },
     { ld_iyh_e,     DASM("LD IYh,E")    /* 0xFD 0x63 */ },
-    { NULL,         DASM("")            /* 0xFD 0x64 */ },
-    { NULL,         DASM("")            /* 0xFD 0x65 */ },
+    { ld_iyh_iyh,   DASM("LD IYh,IYh")  /* 0xFD 0x64 */ },
+    { ld_iyh_iyl,   DASM("LD IYh,IYl")  /* 0xFD 0x65 */ },
     { ld_h_miyd,    DASM("LD H,(IY+#d)")/* 0xFD 0x66 */ },
     { ld_iyh_a,     DASM("LD IYh,A")    /* 0xFD 0x67 */ },
     { ld_iyl_b,     DASM("LD IYl,B")    /* 0xFD 0x68 */ },
     { ld_iyl_c,     DASM("LD IYl,C")    /* 0xFD 0x69 */ },
     { ld_iyl_d,     DASM("LD IYl,D")    /* 0xFD 0x6A */ },
     { ld_iyl_e,     DASM("LD IYl,E")    /* 0xFD 0x6B */ },
-    { NULL,         DASM("")            /* 0xFD 0x6C */ },
-    { NULL,         DASM("")            /* 0xFD 0x6D */ },
+    { ld_iyl_iyh,   DASM("LD IYl,IYh")  /* 0xFD 0x6C */ },
+    { ld_iyl_iyl,   DASM("LD IYl,IYl")  /* 0xFD 0x6D */ },
     { ld_l_miyd,    DASM("LD L,(IY+#d)")/* 0xFD 0x6E */ },
     { ld_iyl_a,     DASM("LD IYl,A")    /* 0xFD 0x6F */ },
     { ld_miyd_b,    DASM("LD (IY+#d),B")/* 0xFD 0x70 */ },
@@ -525,64 +675,64 @@ opcode opcodes_fd[256] = {
     { NULL,         DASM("")            /* 0xFD 0x81 */ },
     { NULL,         DASM("")            /* 0xFD 0x82 */ },
     { NULL,         DASM("")            /* 0xFD 0x83 */ },
-    { NULL,         DASM("")            /* 0xFD 0x84 */ },
-    { NULL,         DASM("")            /* 0xFD 0x85 */ },
+    { add_a_iyh,    DASM("ADD A,IYh")   /* 0xFD 0x84 */ },
+    { add_a_iyl,    DASM("ADD A,IYl")   /* 0xFD 0x85 */ },
     { add_a_miyd,   DASM("ADD A,(IY+#d)")/* 0xFD 0x86 */ },
     { NULL,         DASM("")            /* 0xFD 0x87 */ },
     { NULL,         DASM("")            /* 0xFD 0x88 */ },
     { NULL,         DASM("")            /* 0xFD 0x89 */ },
     { NULL,         DASM("")            /* 0xFD 0x8A */ },
     { NULL,         DASM("")            /* 0xFD 0x8B */ },
-    { NULL,         DASM("")            /* 0xFD 0x8C */ },
-    { NULL,         DASM("")            /* 0xFD 0x8D */ },
+    { adc_a_iyh,    DASM("ADC A,IYh")   /* 0xFD 0x8C */ },
+    { adc_a_iyl,    DASM("ADC A,IYl")   /* 0xFD 0x8D */ },
     { adc_a_miyd,   DASM("ADC A,(IY+#d)")/* 0xFD 0x8E */ },
     { NULL,         DASM("")            /* 0xFD 0x8F */ },
     { NULL,         DASM("")            /* 0xFD 0x90 */ },
     { NULL,         DASM("")            /* 0xFD 0x91 */ },
     { NULL,         DASM("")            /* 0xFD 0x92 */ },
     { NULL,         DASM("")            /* 0xFD 0x93 */ },
-    { NULL,         DASM("")            /* 0xFD 0x94 */ },
-    { NULL,         DASM("")            /* 0xFD 0x95 */ },
+    { sub_iyh,      DASM("SUB IYh")     /* 0xFD 0x94 */ },
+    { sub_iyl,      DASM("SUB IYl")     /* 0xFD 0x95 */ },
     { sub_miyd,     DASM("SUB (IY+#d)") /* 0xFD 0x96 */ },
     { NULL,         DASM("")            /* 0xFD 0x97 */ },
     { NULL,         DASM("")            /* 0xFD 0x98 */ },
     { NULL,         DASM("")            /* 0xFD 0x99 */ },
     { NULL,         DASM("")            /* 0xFD 0x9A */ },
     { NULL,         DASM("")            /* 0xFD 0x9B */ },
-    { NULL,         DASM("")            /* 0xFD 0x9C */ },
-    { NULL,         DASM("")            /* 0xFD 0x9D */ },
+    { sbc_a_iyh,    DASM("SBC A,IYh")   /* 0xFD 0x9C */ },
+    { sbc_a_iyl,    DASM("SBC A,IYl")   /* 0xFD 0x9D */ },
     { sbc_a_miyd,   DASM("SBC A,(IY+#d)")/* 0xFD 0x9E */ },
     { NULL,         DASM("")            /* 0xFD 0x9F */ },
     { NULL,         DASM("")            /* 0xFD 0xA0 */ },
     { NULL,         DASM("")            /* 0xFD 0xA1 */ },
     { NULL,         DASM("")            /* 0xFD 0xA2 */ },
     { NULL,         DASM("")            /* 0xFD 0xA3 */ },
-    { NULL,         DASM("")            /* 0xFD 0xA4 */ },
-    { NULL,         DASM("")            /* 0xFD 0xA5 */ },
+    { and_iyh,      DASM("AND IYh")     /* 0xFD 0xA4 */ },
+    { and_iyl,      DASM("AND IYl")     /* 0xFD 0xA5 */ },
     { and_miyd,     DASM("AND (IY+#d)") /* 0xFD 0xA6 */ },
     { NULL,         DASM("")            /* 0xFD 0xA7 */ },
     { NULL,         DASM("")            /* 0xFD 0xA8 */ },
     { NULL,         DASM("")            /* 0xFD 0xA9 */ },
     { NULL,         DASM("")            /* 0xFD 0xAA */ },
     { NULL,         DASM("")            /* 0xFD 0xAB */ },
-    { NULL,         DASM("")            /* 0xFD 0xAC */ },
-    { NULL,         DASM("")            /* 0xFD 0xAD */ },
+    { xor_iyh,      DASM("XOR IYh")     /* 0xFD 0xAC */ },
+    { xor_iyl,      DASM("XOR IYl")     /* 0xFD 0xAD */ },
     { xor_miyd,     DASM("XOR (IY+#d)") /* 0xFD 0xAE */ },
     { NULL,         DASM("")            /* 0xFD 0xAF */ },
     { NULL,         DASM("")            /* 0xFD 0xB0 */ },
     { NULL,         DASM("")            /* 0xFD 0xB1 */ },
     { NULL,         DASM("")            /* 0xFD 0xB2 */ },
     { NULL,         DASM("")            /* 0xFD 0xB3 */ },
-    { NULL,         DASM("")            /* 0xFD 0xB4 */ },
-    { NULL,         DASM("")            /* 0xFD 0xB5 */ },
+    { or_iyh,       DASM("OR IYh")      /* 0xFD 0xB4 */ },
+    { or_iyl,       DASM("OR IYl")      /* 0xFD 0xB5 */ },
     { or_miyd,      DASM("OR (IY+#d)")  /* 0xFD 0xB6 */ },
     { NULL,         DASM("")            /* 0xFD 0xB7 */ },
     { NULL,         DASM("")            /* 0xFD 0xB8 */ },
     { NULL,         DASM("")            /* 0xFD 0xB9 */ },
     { NULL,         DASM("")            /* 0xFD 0xBA */ },
     { NULL,         DASM("")            /* 0xFD 0xBB */ },
-    { NULL,         DASM("")            /* 0xFD 0xBC */ },
-    { NULL,         DASM("")            /* 0xFD 0xBD */ },
+    { cp_iyh,       DASM("CP IYh")      /* 0xFD 0xBC */ },
+    { cp_iyl,       DASM("CP IYl")      /* 0xFD 0xBD */ },
     { cp_miyd,      DASM("CP (IY+#d)")  /* 0xFD 0xBE */ },
     { NULL,         DASM("")            /* 0xFD 0xBF */ },
     { NULL,         DASM("")            /* 0xFD 0xC0 */ },
@@ -642,7 +792,7 @@ opcode opcodes_fd[256] = {
     { NULL,         DASM("")            /* 0xFD 0xF6 */ },
     { NULL,         DASM("")            /* 0xFD 0xF7 */ },
     { NULL,         DASM("")            /* 0xFD 0xF8 */ },
-    { NULL,         DASM("")            /* 0xFD 0xF9 */ },
+    { ld_sp_iy,     DASM("LD SP,IY")    /* 0xFD 0xF9 */ },
     { NULL,         DASM("")            /* 0xFD 0xFA */ },
     { NULL,         DASM("")            /* 0xFD 0xFB */ },
     { NULL,         DASM("")            /* 0xFD 0xFC */ },
