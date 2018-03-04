@@ -10,6 +10,7 @@ emulika_SOURCES = main.c \
 	ym2413.c ym2413.h \
 	icon.c icon.h \
 	input.c input.h \
+	emuconfig.c emuconfig.h \
 	sn76489.c sn76489.h \
 	screenshot.c screenshot.h \
 	emul.h \

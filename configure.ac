@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.68])
-AC_INIT([emulika], [0.2.0], [])
+AC_INIT([emulika], [0.2.1], [])
 AM_INIT_AUTOMAKE
 AC_CONFIG_SRCDIR([src/main.c])
 AC_CONFIG_HEADERS([config.h])
@@ -71,6 +71,12 @@ AC_CHECK_HEADERS([SDL2/SDL.h], ,
 
 AC_CHECK_FUNC([SDL_GetPrefPath], ,
 		AC_MSG_ERROR([ *** SDL2 version >= 2.0.1 required]))
+
+# SDL2_image
+AC_CHECK_LIB([SDL2_image], [IMG_Load], ,
+		AC_MSG_ERROR([ *** Unable to find libSDL2_image library]))
+AC_CHECK_HEADERS([SDL2/SDL_image.h], ,
+		AC_MSG_ERROR([ *** Unable to find libSDL2_image headers]))
 
 # xml2
 AC_CHECK_PROG(HAVE_XML2_CONFIG, xml2-config, yes, no)

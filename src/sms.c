@@ -29,7 +29,6 @@
 #include "clock.h"
 #include "emul.h"
 #include "environ.h"
-#include "input.h"
 #include "misc/log4me.h"
 #include "misc/exit.h"
 #include "misc/xml.h"
@@ -463,7 +462,7 @@ void ms_free(mastersystem *sms)
     free(sms);
 }
 
-mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, int joypad1, int joypad2, string backupdir)
+mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, const iprofile *player1, const iprofile *player2, string backupdir)
 {
     int i;
     assert((getromgameconsole(rspecs)==GC_SMS) || (getromgameconsole(rspecs)==GC_GG));
@@ -546,8 +545,8 @@ mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff
 
     sms_writeio3E(sms, 0x3E, sms->port_3e); // force init iochip_disable, etc...
 
-    sms->joystick1 = joypad1;
-    sms->joystick2 = joypad2;
+    sms->player1 = player1;
+    sms->player2 = player2;
 
     sms->pause = 0;
 
@@ -711,7 +710,7 @@ void ms_execute(mastersystem *sms)
         } while(sms->tstates<tstates_per_scanline);
         sms->tstates -= tstates_per_scanline;
 
-        if((sms->gconsole==GC_SMS) && input_key_down(SDL_SCANCODE_S))
+        if((sms->gconsole==GC_SMS) && input_button_down(sms->player1, BTN_START))
             cpuZ80_nmi(sms->z80);
 
         sn76489_execute(&sms->snd);
@@ -763,14 +762,6 @@ int ms_ispaused(mastersystem *sms)
     SET_RES_PAD(input_key_pressed(key), port, flag); \
 }
 
-#define BUT_PAD(pad, button, port, flag) {\
-    SET_RES_PAD(input_pad_button_pressed((pad),(button)), port, flag); \
-}
-
-#define AXS_PAD(pad, axis, port, flag) {\
-    SET_RES_PAD(input_pad_axis_pressed((pad),(axis)), port, flag); \
-}
-
 static void sms_updatejoypads(mastersystem *sms)
 {
     int nevents;
@@ -789,41 +780,25 @@ static void sms_updatejoypads(mastersystem *sms)
         input_process_event(&events[nevents]);
 
     // Joypad 1
-    if(sms->joystick1==NO_JOYPAD) {
-        KEY_PAD(SDL_SCANCODE_UP   , sms->port_dc, JOYPAD1_DC_UP);
-        KEY_PAD(SDL_SCANCODE_DOWN , sms->port_dc, JOYPAD1_DC_DOWN);
-        KEY_PAD(SDL_SCANCODE_RIGHT, sms->port_dc, JOYPAD1_DC_RIGHT);
-        KEY_PAD(SDL_SCANCODE_LEFT , sms->port_dc, JOYPAD1_DC_LEFT);
-        KEY_PAD(SDL_SCANCODE_Z    , sms->port_dc, JOYPAD1_DC_TL);
-        KEY_PAD(SDL_SCANCODE_X    , sms->port_dc, JOYPAD1_DC_TR);
-    } else {
-        AXS_PAD(sms->joystick1, AX_UP   , sms->port_dc, JOYPAD1_DC_UP);
-        AXS_PAD(sms->joystick1, AX_DOWN , sms->port_dc, JOYPAD1_DC_DOWN);
-        AXS_PAD(sms->joystick1, AX_RIGHT, sms->port_dc, JOYPAD1_DC_RIGHT);
-        AXS_PAD(sms->joystick1, AX_LEFT , sms->port_dc, JOYPAD1_DC_LEFT);
-        BUT_PAD(sms->joystick1, 0, sms->port_dc, JOYPAD1_DC_TL);
-        BUT_PAD(sms->joystick1, 1, sms->port_dc, JOYPAD1_DC_TR);
-    }
+    SET_RES_PAD(input_button_pressed(sms->player1, BTN_UP   ), sms->port_dc, JOYPAD1_DC_UP);
+    SET_RES_PAD(input_button_pressed(sms->player1, BTN_DOWN ), sms->port_dc, JOYPAD1_DC_DOWN);
+    SET_RES_PAD(input_button_pressed(sms->player1, BTN_RIGHT), sms->port_dc, JOYPAD1_DC_RIGHT);
+    SET_RES_PAD(input_button_pressed(sms->player1, BTN_LEFT ), sms->port_dc, JOYPAD1_DC_LEFT);
+    SET_RES_PAD(input_button_pressed(sms->player1, BTN_A    ), sms->port_dc, JOYPAD1_DC_TL);
+    SET_RES_PAD(input_button_pressed(sms->player1, BTN_B    ), sms->port_dc, JOYPAD1_DC_TR);
 
     // Joypad 2
-    if(sms->joystick2==NO_JOYPAD) {
-        KEY_PAD(SDL_SCANCODE_KP_8     , sms->port_dc, JOYPAD2_DC_UP);
-        KEY_PAD(SDL_SCANCODE_KP_5     , sms->port_dc, JOYPAD2_DC_DOWN);
-        KEY_PAD(SDL_SCANCODE_KP_6     , sms->port_dd, JOYPAD2_DD_RIGHT);
-        KEY_PAD(SDL_SCANCODE_KP_4     , sms->port_dd, JOYPAD2_DD_LEFT);
-        KEY_PAD(SDL_SCANCODE_KP_0     , sms->port_dd, JOYPAD2_DD_TL);
-        KEY_PAD(SDL_SCANCODE_KP_PERIOD, sms->port_dd, JOYPAD2_DD_TR);
-    } else {
-        AXS_PAD(sms->joystick2, AX_UP   , sms->port_dc, JOYPAD2_DC_UP);
-        AXS_PAD(sms->joystick2, AX_DOWN , sms->port_dc, JOYPAD2_DC_DOWN);
-        AXS_PAD(sms->joystick2, AX_RIGHT, sms->port_dd, JOYPAD2_DD_RIGHT);
-        AXS_PAD(sms->joystick2, AX_LEFT , sms->port_dd, JOYPAD2_DD_LEFT);
-        BUT_PAD(sms->joystick2, 0, sms->port_dd, JOYPAD2_DD_TL);
-        BUT_PAD(sms->joystick2, 1, sms->port_dd, JOYPAD2_DD_TR);
+    if(sms->player2) {
+        SET_RES_PAD(input_button_pressed(sms->player2, BTN_UP   ), sms->port_dc, JOYPAD2_DC_UP);
+        SET_RES_PAD(input_button_pressed(sms->player2, BTN_DOWN ), sms->port_dc, JOYPAD2_DC_DOWN);
+        SET_RES_PAD(input_button_pressed(sms->player2, BTN_RIGHT), sms->port_dd, JOYPAD2_DD_RIGHT);
+        SET_RES_PAD(input_button_pressed(sms->player2, BTN_LEFT ), sms->port_dd, JOYPAD2_DD_LEFT);
+        SET_RES_PAD(input_button_pressed(sms->player2, BTN_A    ), sms->port_dd, JOYPAD2_DD_TL);
+        SET_RES_PAD(input_button_pressed(sms->player2, BTN_B    ), sms->port_dd, JOYPAD2_DD_TR);
     }
 
     if(sms->gconsole==GC_GG) {
-        KEY_PAD(SDL_SCANCODE_S, sms->ports[0], GG_START_PAUSE);
+       SET_RES_PAD(input_button_pressed(sms->player1, BTN_START), sms->ports[0], GG_START_PAUSE);
     }
 
     // Others

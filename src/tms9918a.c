@@ -179,8 +179,8 @@ void tms9918a_init(tms9918a *cpn, gameconsole gconsole, const display *screen, v
     cpn->screen = screen;
     cpn->ggrect = &ggrect192;
     cpn->picture = gconsole==GC_GG ?
-                        SDL_CreateTexture(screen->renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, GG_SCREEN_WIDTH, GG_SCREEN_HEIGHT) :
-                        SDL_CreateTexture(screen->renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, 192);
+                        SDL_CreateTexture(video_getrenderer(), SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, GG_SCREEN_WIDTH, GG_SCREEN_HEIGHT) :
+                        SDL_CreateTexture(video_getrenderer(), SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, 192);
 
     cpn->pixelfmt = SDL_AllocFormat(SDL_PIXELFORMAT_RGB565);
     cpn->buffer16 = calloc(256*224, sizeof(word));
@@ -244,7 +244,9 @@ static void tms9918a_setregister(tms9918a *cpn, int reg, byte data)
         case 0:
             if(bit0_is_set(data) || bit3_is_set(data)) {
                 log4me_warning(LOG_EMU_SMSVDP, "write register 0 : 0x%02X\n", data);
+#ifdef DEBUG
                 exit(EXIT_FAILURE);
+#endif
             }
 
             cpn->r0_vert_scroll_inhibit = bit7_is_set(data);
@@ -816,43 +818,28 @@ static void tms9918a_renderline(tms9918a *cpn)
 
 static void tms9918a_flip(tms9918a *cpn)
 {
-    Uint8 r, g, b;
-    SDL_Rect dstrect;
     word *buffer = cpn->buffer16;
-
-    dstrect.x = cpn->screen->marginx;
-    dstrect.y = cpn->screen->marginy;
-    dstrect.w = cpn->screen->width * cpn->screen->scale;
-    dstrect.h = cpn->screen->height * cpn->screen->scale;
 
     if(cpn->gconsole==GC_GG)
         buffer += ((cpn->ggrect->y << 8) + cpn->ggrect->x);
 
-    SDL_UpdateTexture(cpn->picture, NULL, buffer, 256*sizeof(word));
-
-    SDL_GetRGB(cpn->gconsole==GC_GG ? 0 : cpn->sdlcolors[cpn->r7_bordercolor], cpn->pixelfmt, &r, &g, &b);
-    SDL_SetRenderDrawColor(cpn->screen->renderer, r, g, b, 255);
-    SDL_RenderClear(cpn->screen->renderer);
-
-    SDL_RenderCopy(cpn->screen->renderer, cpn->picture, NULL, &dstrect);
-
 #ifdef DEBUG
     if(cpn->showpalette) {
-        int i;
-        SDL_Rect colrect;
-        colrect.y = 0;
-        colrect.w = (cpn->screen->width * cpn->screen->scale) / TMS_COLORS;
-        colrect.h = 8 * cpn->screen->scale;
+        int i, j;
+        word *palettebuf = buffer;
         for(i=0;i<TMS_COLORS;i++) {
-            colrect.x = (colrect.w * i) + cpn->screen->marginx;
-            SDL_GetRGB(cpn->sdlcolors[i], cpn->pixelfmt, &r, &g, &b);
-            SDL_SetRenderDrawColor(cpn->screen->renderer, r, g, b, 255);
-            SDL_RenderFillRect(cpn->screen->renderer, &colrect);
+            for(j=0; j<(cpn->gconsole==GC_GG ? GG_SCREEN_WIDTH : 256)/TMS_COLORS; j++, palettebuf++) {
+                palettebuf[  0] = cpn->sdlcolors[i];
+                palettebuf[256] = cpn->sdlcolors[i];
+                palettebuf[512] = cpn->sdlcolors[i];
+            }
         }
     }
 #endif
 
-    SDL_RenderPresent(cpn->screen->renderer);
+    SDL_UpdateTexture(cpn->picture, NULL, buffer, 256*sizeof(word));
+
+    displaytexture(cpn->screen, cpn->picture, cpn->pixelfmt, cpn->gconsole==GC_GG ? 0 : cpn->sdlcolors[cpn->r7_bordercolor]);
 }
 
 void tms9918a_waitnextframe(tms9918a *cpn)
@@ -872,7 +859,7 @@ void tms9918a_execute(tms9918a *cpn)
         if(cpn->screenheight!=oldscreenheight) {
             if(cpn->gconsole==GC_SMS) {
                 SDL_DestroyTexture(cpn->picture);
-                cpn->picture = SDL_CreateTexture(cpn->screen->renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, cpn->screenheight);
+                cpn->picture = SDL_CreateTexture(video_getrenderer(), SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, 256, cpn->screenheight);
             } else {
                 assert(cpn->gconsole==GC_GG);
                 cpn->ggrect = cpn->screenheight==224 ? &ggrect224 : &ggrect192;

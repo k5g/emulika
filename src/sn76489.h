@@ -41,6 +41,8 @@ typedef struct {
     int scanlines;
 } sn76489;
 
+void audio_setvolume(int volume);
+
 void sn76489_init(sn76489 *snd, int clock, int scanlinespersecond, soundchannel channels, sound_onoff playsound);
 void sn76489_free(sn76489 *snd);
 

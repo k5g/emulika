@@ -101,7 +101,7 @@ int clock_elapsed(sdlclock c)
 }
 
 
-#define DELAY   4
+#define DELAY   2
 
 void clock_wait(sdlclock c)
 {

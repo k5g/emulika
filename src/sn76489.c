@@ -33,10 +33,20 @@ SN76489 implementation based on :
 #define SN7_VOLUME_CMD  0x90
 #define SN7_FREQ_CMD    0x80
 
+int _volume = 256;
+
 short volume_table[16]={
    32767/4, 26028/4, 20675/4, 16422/4, 13045/4, 10362/4,  8231/4,  6568/4,
     5193/4,  4125/4,  3277/4,  2603/4,  2067/4,  1642/4,  1304/4,     0
 };
+
+void audio_setvolume(int volume)
+{
+    if(volume>100) volume = 100;
+    if(volume<0) volume = 0;
+
+    _volume = (volume * 256) / 100;
+}
 
 static void sn76489_SDLmixaudio(void *userdata, Uint8 *stream, int len)
 {
@@ -278,7 +288,7 @@ static void sn76489_internalmixaudio(sn76489 *snd)
                 sound += (snd->polarity[i] ? -volume_table[snd->volume[i]] : volume_table[snd->volume[i]]);
             }
         }
-        snd->buffer[snd->curpos++] = sound;
+        snd->buffer[snd->curpos++] = ((int)sound * _volume) >> 8;
     }
     SDL_UnlockAudioDevice(snd->dev);
 

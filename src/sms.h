@@ -9,6 +9,7 @@
 #include "tms9918a.h"
 #include "ym2413.h"
 
+#include "input.h"
 #include "rom.h"
 #include "misc/string.h"
 
@@ -71,8 +72,9 @@ typedef struct _mastersystem {
     int curscanlineps;
     int tstates;
 
-    int joystick1;
-    int joystick2;
+    const iprofile *player1;
+    const iprofile *player2;
+
     int pause;
 
     string backupdir;
@@ -81,7 +83,7 @@ typedef struct _mastersystem {
 } mastersystem;
 
 
-mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, int joypad1, int joypad2, string backupdir);
+mastersystem* ms_init(const display *screen, const romspecs *rspecs, sound_onoff playsound, const iprofile *player1, const iprofile *player2, string backupdir);
 
 void ms_start(mastersystem *sms);
 void ms_execute(mastersystem *sms);

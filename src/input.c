@@ -30,9 +30,8 @@ typedef struct {
 
 typedef struct {
     SDL_Joystick *joy;
-    int available;
     sword *axis;
-    byte *buttons;
+    kstat *buttons;
 } jstat;
 
 kstat *statuskeys = NULL;
@@ -68,12 +67,10 @@ void input_init()
         SDL_Joystick *j = SDL_JoystickOpen(i);
         if((SDL_JoystickNumAxes(j)<8) && (SDL_JoystickNumButtons(j)<20)) {
             statuspads[i].joy = j;
-            statuspads[i].available = 1;
             statuspads[i].axis = calloc(SDL_JoystickNumAxes(j), sizeof(sword));
             statuspads[i].buttons = calloc(SDL_JoystickNumButtons(j), sizeof(byte));
         } else {
             SDL_JoystickClose(j);
-            assert(statuspads[i].available==0);
         }
     }
 
@@ -104,12 +101,16 @@ void input_process_event(const SDL_Event *event)
             break;
 
         case SDL_JOYBUTTONDOWN:
-            statuspads[event->jbutton.which].buttons[event->jbutton.button] = 1;
+            statuspads[event->jbutton.which].buttons[event->jbutton.button].pressed = 1;
+            statuspads[event->jbutton.which].buttons[event->jbutton.button].down = 1;
+            statuspads[event->jbutton.which].buttons[event->jbutton.button].up = 0;
             log4me_debug(LOG_EMU_JOYSTICK, "J%d button %d down\n", event->jbutton.which, event->jbutton.button);
             break;
 
         case SDL_JOYBUTTONUP:
-            statuspads[event->jbutton.which].buttons[event->jbutton.button] = 0;
+            statuspads[event->jbutton.which].buttons[event->jbutton.button].pressed = 0;
+            statuspads[event->jbutton.which].buttons[event->jbutton.button].down = 0;
+            statuspads[event->jbutton.which].buttons[event->jbutton.button].up = 1;
             log4me_debug(LOG_EMU_JOYSTICK, "J%d button %d up\n", event->jbutton.which, event->jbutton.button);
             break;
 
@@ -156,63 +157,240 @@ int input_pad_detected()
     return 0;
 }
 
-int input_new_pad()
-{
-    int i;
-    for(i=0; i<SDL_NumJoysticks(); i++) {
-        if(statuspads[i].available) {
-            statuspads[i].available = 0;
-            return i;
-        }
-    }
-    return NO_JOYPAD;
-}
-
-void input_release_pad(int pad)
-{
-    if(pad==NO_JOYPAD) return;
-
-    assert(pad<SDL_NumJoysticks());
-    assert(statuspads[pad].available==0);
-
-    statuspads[pad].available = 1;
-}
-
 int input_pad_button_pressed(int pad, int button)
 {
     assert(pad<SDL_NumJoysticks());
     assert(button<SDL_JoystickNumButtons(statuspads[pad].joy));
-    return statuspads[pad].buttons[button];
+    statuspads[pad].buttons[button].down = 0;
+    statuspads[pad].buttons[button].up = 0;
+    return statuspads[pad].buttons[button].pressed;
 }
 
-int input_pad_axis_pressed(int pad, t_axis axis)
+int input_pad_button_down(int pad, int button)
 {
     assert(pad<SDL_NumJoysticks());
-    switch(axis) {
-        case AX_LEFT:
-            return statuspads[pad].axis[0]<=-8192;
-        case AX_RIGHT:
-            return statuspads[pad].axis[0]>= 8192;
-        case AX_UP:
-            return statuspads[pad].axis[1]<=-8192;
-        case AX_DOWN:
-            return statuspads[pad].axis[1]>= 8192;
-        default:
-            assert(0);
-            break;
-    }
-    return 0;
+    assert(button<SDL_JoystickNumButtons(statuspads[pad].joy));
+    int r = statuspads[pad].buttons[button].down;
+    statuspads[pad].buttons[button].down = 0;
+    return r;
 }
 
-void input_pad_getinfos(int pad, padinfos *infos)
+int input_pad_button_up(int pad, int button)
 {
     assert(pad<SDL_NumJoysticks());
-    assert(statuspads[pad].joy);
+    assert(button<SDL_JoystickNumButtons(statuspads[pad].joy));
+    int r = statuspads[pad].buttons[button].up;
+    statuspads[pad].buttons[button].up = 0;
+    return r;
+}
+
+int input_pad_axis_pressed(int pad, byte axis)
+{
+    assert(pad<SDL_NumJoysticks());
+
+    return (axis & 0xF0) ? (statuspads[pad].axis[axis&0x0F]<=-8192) : (statuspads[pad].axis[axis&0x0F]>=8192);
+}
+
+int input_pad_getinfos(int pad, padinfos *infos)
+{
+    assert(pad<SDL_NumJoysticks());
+
+    if(statuspads[pad].joy==NULL)
+        return 0;
 
     infos->name = SDL_JoystickNameForIndex(pad);
     infos->buttons = SDL_JoystickNumButtons(statuspads[pad].joy);
     infos->axis = SDL_JoystickNumAxes(statuspads[pad].joy);
     infos->hats = SDL_JoystickNumBalls(statuspads[pad].joy);
+    return 1;
+}
+
+int input_button_pressed(const iprofile *profile, t_button btn)
+{
+    switch(btn) {
+        case BTN_UP:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.up);
+                case INP_JOYPAD:
+                    return input_pad_axis_pressed(profile->pad.index, profile->pad.up);
+            }
+            break;
+        case BTN_DOWN:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.down);
+                case INP_JOYPAD:
+                    return input_pad_axis_pressed(profile->pad.index, profile->pad.down);
+            }
+            break;
+        case BTN_LEFT:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.left);
+                case INP_JOYPAD:
+                    return input_pad_axis_pressed(profile->pad.index, profile->pad.left);
+            }
+            break;
+        case BTN_RIGHT:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.right);
+                case INP_JOYPAD:
+                    return input_pad_axis_pressed(profile->pad.index, profile->pad.right);
+            }
+            break;
+        case BTN_A:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.btn_a);
+                case INP_JOYPAD:
+                    return input_pad_button_pressed(profile->pad.index, profile->pad.btn_a);
+            }
+            break;
+        case BTN_B:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.btn_b);
+                case INP_JOYPAD:
+                    return input_pad_button_pressed(profile->pad.index, profile->pad.btn_b);
+            }
+            break;
+        case BTN_START:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_pressed(profile->kbd.btn_start);
+                case INP_JOYPAD:
+                    return input_pad_button_pressed(profile->pad.index, profile->pad.btn_start);
+            }
+            break;
+    }
+
+    return 0;
+}
+
+int input_button_down(const iprofile *profile, t_button btn)
+{
+    switch(btn) {
+        case BTN_UP:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.up);
+                case INP_JOYPAD:
+                    return 0;
+            }
+            break;
+        case BTN_DOWN:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.down);
+                case INP_JOYPAD:
+                    return 0;
+            }
+            break;
+        case BTN_LEFT:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.left);
+                case INP_JOYPAD:
+                    return 0;
+            }
+            break;
+        case BTN_RIGHT:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.right);
+                case INP_JOYPAD:
+                    return 0;
+            }
+            break;
+        case BTN_A:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.btn_a);
+                case INP_JOYPAD:
+                    return input_pad_button_down(profile->pad.index, profile->pad.btn_a);
+            }
+            break;
+        case BTN_B:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.btn_b);
+                case INP_JOYPAD:
+                    return input_pad_button_down(profile->pad.index, profile->pad.btn_b);
+            }
+            break;
+        case BTN_START:
+            switch(profile->base.type) {
+                case INP_KEYBOARD:
+                    return input_key_down(profile->kbd.btn_start);
+                case INP_JOYPAD:
+                    return input_pad_button_down(profile->pad.index, profile->pad.btn_start);
+            }
+            break;
+    }
+
+    return 0;
+}
+
+void input_loaddefaultprofile(iprofile **p1, iprofile **p2)
+{
+    if(p1!=NULL) {
+        *p1 = (iprofile*)calloc(1, sizeof(iprofile));
+        (*p1)->kbd.type = INP_KEYBOARD;
+        (*p1)->kbd.name = strcrec("Player 1 default keyboard");
+        (*p1)->kbd.up        = SDL_SCANCODE_UP;
+        (*p1)->kbd.down      = SDL_SCANCODE_DOWN;
+        (*p1)->kbd.left      = SDL_SCANCODE_LEFT;
+        (*p1)->kbd.right     = SDL_SCANCODE_RIGHT;
+        (*p1)->kbd.btn_a     = SDL_SCANCODE_Z;
+        (*p1)->kbd.btn_b     = SDL_SCANCODE_X;
+        (*p1)->kbd.btn_start = SDL_SCANCODE_S;
+    }
+
+    if(p2!=NULL) {
+        *p2 = (iprofile*)calloc(1, sizeof(iprofile));
+        (*p2)->kbd.type = INP_KEYBOARD;
+        (*p2)->kbd.name = strcrec("Player 2 default keyboard");
+        (*p2)->kbd.up        = SDL_SCANCODE_KP_8;
+        (*p2)->kbd.down      = SDL_SCANCODE_KP_5;
+        (*p2)->kbd.left      = SDL_SCANCODE_KP_4;
+        (*p2)->kbd.right     = SDL_SCANCODE_KP_6;
+        (*p2)->kbd.btn_a     = SDL_SCANCODE_KP_0;
+        (*p2)->kbd.btn_b     = SDL_SCANCODE_KP_PERIOD;
+        (*p2)->kbd.btn_start = SDL_SCANCODE_S;
+    }
+}
+
+int input_setprofile(iprofile *profile)
+{
+    int i;
+
+    if(profile==NULL)
+        return 0;
+
+    switch(profile->base.type) {
+        case INP_KEYBOARD:
+            return 1;
+        case INP_JOYPAD:
+            for(i=SDL_NumJoysticks()-1; i>=0; i--) {
+                if(strcmp(CSTR(profile->pad.name), SDL_JoystickName(statuspads[i].joy))==0) {
+                    profile->pad.index = i;
+                    return 1;
+                }
+            }
+            break;
+    }
+
+    return 0;
+}
+
+void input_freeprofile(iprofile *profile)
+{
+    if(profile) {
+        strfree(profile->base.name);
+        free(profile);
+    }
 }
 
 

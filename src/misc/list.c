@@ -58,7 +58,6 @@ void *lpop(glist *l)
     void *item;
     gitem *e;
 
-    assert(l->head);
     if(l->head==NULL) return NULL;
 
     e = l->head;

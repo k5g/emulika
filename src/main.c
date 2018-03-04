@@ -26,6 +26,7 @@
 #include <getopt.h>
 #include <zip.h>
 
+#include "emuconfig.h"
 #include "environ.h"
 #include "emul.h"
 #include "sms.h"
@@ -45,7 +46,6 @@
     #endif
 #endif /* HAVE_ENDIAN_H */
 
-#define DEFAULT_SCALE   2
 
 typedef struct {
     string basedir;
@@ -59,7 +59,8 @@ typedef struct {
 
 static appenv *getappenv(void);
 void savetiles(mastersystem *sms, const string debugdir);
-void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tmachine *machine, video_mode *vmode, int *nosound, float *scale, int *codemasters);
+void getconfigfilename(int argc, char **argv, const appenv *env, string *configfilename);
+void readoptions(int argc, char **argv, char **romfilename, tmachine *machine, video_mode *vmode, int *codemasters, emuconfig *config);
 
 void initmodules(const string basedir)
 {
@@ -85,31 +86,33 @@ void initmodules(const string basedir)
     video_init();
     input_init();
 
-    seticon(getcurrentwindow());
+    seticon(video_getcurrentwindow());
 }
 
 int main ( int argc, char** argv )
 {
     int done, pause, bookmark;
-    int joypads[NJOYSTICKS];
+
+    string configfilename  = NULL;
 
     mastersystem *sms = NULL;
     appenv *environment = NULL;
     romspecs *rspecs = NULL;
 
+    emuconfig config;
     display screen;
     SDL_version sdlvers;
 
     char *romfilename=NULL;
-    int nosound = 0;
     int codemasters = 0;
 
     tmachine machine = UNDEFINED;
     video_mode vmode = UNDEFINED;
 
-    screen.fullscreen = 0;
-    screen.scale = DEFAULT_SCALE;
-    screen.minscale = (float)224.0 / 192;
+    iprofile *player1 = NULL;
+    iprofile *player2 = NULL;
+
+    initconfig(&config);
 
 #ifndef DEBUG
     assert(0);
@@ -122,29 +125,56 @@ int main ( int argc, char** argv )
 #ifdef DEBUG
     log4me_print("  => DEBUG version\n");
 #endif
-    readoptions(argc, argv, &romfilename, &screen.fullscreen, &machine, &vmode, &nosound, &screen.scale, &codemasters);
 
+    // Show SDL informations
     SDL_GetVersion(&sdlvers);
     log4me_print("SDL : %d.%d.%d\n", sdlvers.major, sdlvers.minor, sdlvers.patch);
-    log4me_print("SDL : Video driver (%s)\n", getcurrentvideodriver());
-    log4me_print("SDL : Rendered driver (%s)\n", getcurrentrendererdriver());
+    log4me_print("SDL : Video driver (%s)\n", video_getcurrentvideodriver());
+    log4me_print("SDL : Rendered driver (%s)\n", video_getcurrentrendererdriver());
     log4me_print("SDL : Audio driver (%s)\n", SDL_GetCurrentAudioDriver());
 
-    // Init joypads
+    // Show SDL joysticks informations
     int i;
-    for(i=0;i<NJOYSTICKS;i++) joypads[i] = input_new_pad();
-
-    // Display joypads informations
-    if(input_pad_detected()) {
-        padinfos infos;
-        for(i=0;i<NJOYSTICKS;i++) {
-            if(joypads[i]==NO_JOYPAD) continue;
-            input_pad_getinfos(joypads[i], &infos);
-            log4me_print("SDL : Player %d joystick detected => %s\n", i+1, infos.name);
+    padinfos infos;
+    for(i=0;i<SDL_NumJoysticks();i++) {
+        if(input_pad_getinfos(i, &infos)) {
+            log4me_print("SDL : Joystick detected => %s\n", infos.name);
             log4me_print("\tButtons : %d, Axis : %d, Hats : %d\n", infos.buttons, infos.axis, infos.hats);
         }
+    }
+
+    strfree(configfilename);
+    getconfigfilename(argc, argv, environment, &configfilename);
+
+    if(fileexists(configfilename))
+        readconfig(configfilename, &config, &player1, &player2);
+    strfree(configfilename);
+
+    readoptions(argc, argv, &romfilename, &machine, &vmode, &codemasters, &config);
+
+    screen.fullscreen = config.fullscreen;
+    screen.noaspectratio = config.noaspectratio;
+    screen.scale = config.scale;
+
+    // Load default input profile if necessary
+    if(player1==NULL)
+        input_loaddefaultprofile(&player1, player2==NULL ? &player2 : NULL);
+
+    // Init input profile for players
+    if(input_setprofile(player1)==0) {
+        log4me_error(LOG_EMU_MAIN, "Unable to initialize input profile for player 1 : %s.\n", player1 ? CSTR(player1->base.name) : "undefined");
+        exit(EXIT_FAILURE);
     } else
-        log4me_print("SDL : No joystick detected\n");
+        log4me_print("P1  : Input profile = %s\n", CSTR(player1->base.name));
+
+
+    if(player2) {
+        if(input_setprofile(player2)==0) {
+            log4me_error(LOG_EMU_MAIN, "Unable to initialize input profile for player 2 : %s.\n", player2 ? CSTR(player2->base.name) : "undefined");
+            exit(EXIT_FAILURE);
+        } else
+            log4me_print("P2  : Input profile = %s\n", CSTR(player2->base.name));
+    }
 
     rspecs = getromspecs(romfilename, machine, vmode, codemasters);
     machine = getrommachine(rspecs);
@@ -153,6 +183,8 @@ int main ( int argc, char** argv )
     assert((machine==JAPAN) || (machine==EXPORT));
     assert((vmode==VM_NTSC) || (vmode==VM_PAL));
     log4me_print("SMS : Use %s machine with %s video mode\n", machine==EXPORT ? "Export" : "Japan", vmode==VM_PAL ? "PAL" : "NTSC");
+
+    screen.minscale = (float)224.0 / 192;
 
     switch(getromgameconsole(rspecs)) {
         case GC_SMS:
@@ -169,15 +201,24 @@ int main ( int argc, char** argv )
             assert(0);
             break;
     }
-    setvideomode(&screen);
+    video_setmode(&screen);
 
-    sms = ms_init(&screen, rspecs, nosound ? SND_OFF : SND_ON, joypads[0], joypads[1], environment->backup);
+    if(config.overlayfilename)
+        video_setoverlay(&screen, CSTR(config.overlayfilename));
+
+
+    if(config.bezelfilename)
+        video_setbezel(&screen, CSTR(config.bezelfilename));
+
+    audio_setvolume(config.volume);
+
+    sms = ms_init(&screen, rspecs, config.nosound ? SND_OFF : SND_ON, player1, player2, environment->backup);
     if(sms==NULL) {
         log4me_error(LOG_EMU_MAIN, "Unable to allocate and initialize the SMS emulator.\n");
         exit(EXIT_FAILURE);
     }
 
-    SDL_SetWindowTitle(screen.window, CSTR(sms->romname));
+    SDL_SetWindowTitle(video_getcurrentwindow(), CSTR(sms->romname));
 
     done = pause = bookmark = 0;
 
@@ -186,6 +227,7 @@ int main ( int argc, char** argv )
     {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
+            video_event(&event);
             input_process_event(&event);
             done |= (event.type==SDL_QUIT);
         }
@@ -206,21 +248,21 @@ int main ( int argc, char** argv )
         if(input_key_down(SDL_SCANCODE_F2)) {
             ms_pause(sms, 1);
             screen.scale -= 0.2;
-            setvideomode(&screen);
+            video_setmode(&screen);
             ms_pause(sms, 0);
         }
 
         if(input_key_down(SDL_SCANCODE_F3)) {
             ms_pause(sms, 1);
             screen.scale += 0.2;
-            setvideomode(&screen);
+            video_setmode(&screen);
             ms_pause(sms, 0);
         }
 
         if(input_key_down(SDL_SCANCODE_F4)) {
             ms_pause(sms, 1);
             screen.fullscreen ^= 1;
-            setvideomode(&screen);
+            video_setmode(&screen);
             ms_pause(sms, 0);
         }
 
@@ -240,9 +282,12 @@ int main ( int argc, char** argv )
 
     releaseobject(sms);
     releaseobject(rspecs);
-    for(i=0;i<NJOYSTICKS;i++) input_release_pad(joypads[i]);
+
+    input_freeprofile(player1);
+    input_freeprofile(player2);
 
     releaseobject(environment);
+    freeconfig(&config);
 
     return 0;
 }
@@ -256,26 +301,79 @@ void printhelp()
 {
     printusage();
     log4me_print("\nOptions:\n");
-    log4me_print("  --fullscreen\t: Set fullscreen mode\n");
-    log4me_print("  --machine MCH\t: Set machine type [japan/export] (default=japan)\n");
-    log4me_print("  --mode TYPE\t: Set video mode NTSC/PAL [ntsc/pal] (default=ntsc)\n");
-    log4me_print("  --nosound\t: Set sound off\n");
-    log4me_print("  --scale NUM\t: Increase the size of the screen by NUM (default=%d)\n", DEFAULT_SCALE);
-    log4me_print("  --codemasters\t: Force the compatibility of Codemasters games\n");
+    log4me_print("  --fullscreen\t\t: Set the fullscreen mode\n");
+    log4me_print("  --machine MCH\t\t: Set the machine type [japan/export] (default=japan)\n");
+    log4me_print("  --mode TYPE\t\t: Set the video mode NTSC/PAL [ntsc/pal] (default=ntsc)\n");
+    log4me_print("  --nosound\t\t: Set the sound to off\n");
+    log4me_print("  --volume VOL\t\t: Set the volume [0..100] (default=100)\n");
+    log4me_print("  --noaspectratio\t: Don't keep aspect ratio\n");
+    log4me_print("  --scale NUM\t\t: Increase the size of the screen by NUM (default=%d)\n", DEFAULT_SCALE);
+    log4me_print("  --codemasters\t\t: Force the compatibility of Codemasters games\n");
+    log4me_print("  --config FILE\t\t: Set the configuration filename\n");
+    log4me_print("  --overlay FILE\t: Add the overlay image to the video output\n");
+    log4me_print("  --bezel FILE\t\t: Add the bezel image to the video output (only in fullscreen mode)\n");
 }
 
-void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tmachine *machine, video_mode *vmode, int *nosound, float *scale, int *codemasters)
+void getconfigfilename(int argc, char **argv, const appenv *env, string *configfilename)
+{
+    #define ARGVSIZE (sizeof(char*) * argc)
+    // http://askedquestionsnanswers.net/question/4832603-how-could-i-temporary-redirect-stdout-to-a-file-in-a-c-program
+
+    int c, option_index;
+    string filename = NULL;
+    char **argv_copy = malloc(ARGVSIZE);
+
+    struct option long_options[] = {
+        {"fullscreen"   , no_argument       , NULL, 0   },
+        {"machine"      , no_argument       , NULL, 0   },
+        {"mode"         , no_argument       , NULL, 0   },
+        {"volume"       , no_argument       , NULL, 0   },
+        {"nosound"      , no_argument       , NULL, 0   },
+        {"noaspectratio", no_argument       , NULL, 0   },
+        {"scale"        , no_argument       , NULL, 0   },
+        {"codemasters"  , no_argument       , NULL, 0   },
+        {"config"       , required_argument , NULL, 'c' },
+        {"bezel"        , no_argument       , NULL, 0   },
+        {"overlay"      , no_argument       , NULL, 0   },
+        {"help"         , no_argument       , NULL, 0   },
+        { NULL          , 0                 , NULL, 0   }
+    };
+
+    assert(optind==1);
+    memcpy(argv_copy, argv, ARGVSIZE);
+
+    while((c = getopt_long(argc, argv_copy, "", long_options, &option_index))!=-1) {
+        if(c=='c')
+            filename = strcrec(optarg);
+    }
+
+    if(filename==NULL) {
+        filename = strdups(env->basedir);
+        pathcombc(filename, "config.xml");
+    }
+
+    *configfilename = filename;
+    free(argv_copy);
+    optind = 1; // reset it to 1 to restart scanning for readoptions
+}
+
+void readoptions(int argc, char **argv, char **romfilename, tmachine *machine, video_mode *vmode, int *codemasters, emuconfig *config)
 {
     int c;
     int option_index;
 
     struct option long_options[] = {
-        {"fullscreen", no_argument, fullscreen, 1},
+        {"fullscreen", no_argument, &config->fullscreen, 1},
         {"machine", required_argument, NULL, 't'},
         {"mode", required_argument, NULL, 'm'},
-        {"nosound", no_argument, nosound, 1},
+        {"volume", required_argument, NULL, 'v'},
+        {"nosound", no_argument, &config->nosound, 1},
+        {"noaspectratio", no_argument, &config->noaspectratio, 1},
         {"scale", required_argument, NULL, 's'},
         {"codemasters", no_argument, codemasters, 1},
+        {"config", required_argument, NULL, 'c'},
+        {"bezel", required_argument, NULL, 'b'},
+        {"overlay", required_argument, NULL, 'o'},
         {"help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0}
     };
@@ -289,17 +387,30 @@ void readoptions(int argc, char **argv, char **romfilename, int *fullscreen, tma
         //printf("-> %c %d (%d)\n", c, (int)c, option_index);
         switch(c) {
             case 's':
-                *scale = atof(optarg);
-                if(*scale<1) {
+                config->scale = atof(optarg);
+                if(config->scale<1) {
                     log4me_print("wrong scale parameter, set to default value\n");
-                    *scale = DEFAULT_SCALE;
+                    config->scale = DEFAULT_SCALE;
                 }
+                break;
+            case 'v':
+                config->volume = atoi(optarg);
                 break;
             case 't':
                 *machine = strcasecmp(optarg, "export")==0 ? EXPORT : JAPAN;
                 break;
             case 'm':
                 *vmode = strcasecmp(optarg, "pal")==0 ? VM_PAL : VM_NTSC;
+                break;
+            case 'c':
+                break;
+            case 'b':
+                strfree(config->bezelfilename);
+                config->bezelfilename = strcrec(optarg);
+                break;
+            case 'o':
+                strfree(config->overlayfilename);
+                config->overlayfilename = strcrec(optarg);
                 break;
             case 'h':
                 printhelp();

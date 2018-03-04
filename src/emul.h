@@ -4,6 +4,7 @@
 #include <assert.h>
 
 #include <SDL.h>
+#include <SDL_image.h>
 
 #include "misc/types.h"
 #include "misc/log4me.h"
@@ -31,10 +32,6 @@
 #define LOG_EMU_SNAPSHOT        LOG_EMU_SNAPSHOT_MASK,"SNP"
 
 #define LOG_EMU_ALL             0xFFFF
-
-
-#define NJOYSTICKS          2
-
 
 #define M2(x)       M1((x)), M1((x)+1)
 #define M4(x)       M2((x)), M2((x)+2)
@@ -71,6 +68,7 @@
 #define ABS(a)          ((a)<0 ? (-(a)) : (a))
 
 #define UNDEFINED       (-1)
+#define DEFAULT_SCALE   2
 
 typedef enum {
     SND_OFF,

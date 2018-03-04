@@ -9,6 +9,9 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
+/* Define to 1 if you have the `SDL2_image' library (-lSDL2_image). */
+#undef HAVE_LIBSDL2_IMAGE
+
 /* Define to 1 if you have the <libxml/xmlwriter.h> header file. */
 #undef HAVE_LIBXML_XMLWRITER_H
 
@@ -37,6 +40,9 @@
 
 /* Define to 1 if you have the <SDL2/SDL.h> header file. */
 #undef HAVE_SDL2_SDL_H
+
+/* Define to 1 if you have the <SDL2/SDL_image.h> header file. */
+#undef HAVE_SDL2_SDL_IMAGE_H
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
